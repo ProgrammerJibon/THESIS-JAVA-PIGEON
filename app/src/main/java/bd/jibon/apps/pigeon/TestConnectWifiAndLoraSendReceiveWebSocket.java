@@ -29,7 +29,7 @@ import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
-public class MainActivity extends AppCompatActivity {
+public class TestConnectWifiAndLoraSendReceiveWebSocket extends AppCompatActivity {
 
     private static final String TAG = "PigeonMeshApp";
 
@@ -44,7 +44,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
+        setContentView(R.layout.test_connect_wifi_and_lora_send_receive_web_socket);
 
         tvStatus = findViewById(R.id.tvStatus);
         tvReceivedData = findViewById(R.id.tvReceivedData);
