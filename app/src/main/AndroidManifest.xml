@@ -27,7 +27,7 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.PIGEON">
         <activity
-            android:name=".TestConnectWifiAndLoraSendReceiveWebSocket"
+            android:name=".TestConnectWifiSendReceiveWebSocket"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -1,3 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PIGEON</string>
+    <string name="app_version">Version 2.0</string>
+    <string name="connection_title">Connect to PIGEON Node</string>
+    <string name="connection_desc">Enter the device name shown on your ESP32 node display to establish a secure offline link.</string>
+    <string name="device_name_label">Device Name (SSID)</string>
+    <string name="device_name_hint">e.g. P1</string>
+    <string name="connect_btn">CONNECT TO NODE</string>
+    <string name="connection_status_label">Network Status:</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connecting">Connecting...</string>
+    <string name="status_connected">Connected securely</string>
+    <string name="login_title">Offline Login</string>
+    <string name="login_desc">This application operates entirely offline using secure localized peer-to-peer networks. Your credentials will be stored safely on local nodes without internet dependencies.</string>
+    <string name="username_label">Username</string>
+    <string name="username_hint">Enter your username</string>
+    <string name="password_label">PIN / Password</string>
+    <string name="password_hint">Enter password</string>
+    <string name="login_btn">INITIALIZE SESSION</string>
+    <string name="logo_desc">PIGEON logo</string>
+
+    <string name="title_chats">Chats</string>
+    <string name="title_groups">Groups</string>
+    <string name="title_profile">Profile</string>
+    <string name="action_plus">Plus Menu</string>
+    <string name="drawer_open">Open Drawer</string>
+    <string name="drawer_close">Close Drawer</string>
+
+    <string name="menu_chats">Private Chats</string>
+    <string name="menu_groups">Tactical Groups</string>
+    <string name="menu_profile">Node Profile</string>
+    <string name="menu_about_app">About PIGEON App</string>
+    <string name="menu_about_device">About Node Hardware</string>
+    <string name="menu_terms">Terms &amp; Conditions</string>
+    <string name="menu_contact">Contact Us</string>
+    <string name="menu_updates">Check for Updates</string>
+    <string name="menu_logout">Logout Session</string>
+
+    <string name="plus_connect_user">Connect with New User</string>
+    <string name="plus_join_group">Join a Group</string>
+    <string name="plus_create_group">Create a Group</string>
+
+    <string name="hint_search_user">Search connected users...</string>
+    <string name="no_active_chats">No secure private channels active</string>
+    <string name="no_active_groups">No group networks joined</string>
+
+    <string name="btn_send">SEND</string>
+    <string name="btn_attach">Attach File</string>
+    <string name="hint_message">Type secure message...</string>
+
+    <string name="about_app_desc">PIGEON (Private Encrypted Network Communication) is a decentralized emergency messaging platform designed to facilitate secure communication during natural disasters and network outages. Operating over autonomous ESP32 hotspots and LoRa mesh networks, it ensures vital connections remain active when traditional infrastructures fail.</string>
+    <string name="about_device_desc">PIGEON Node devices integrate high-performance ESP32 microcontrollers with long-range Semtech LoRa transceivers and secure local storage models. These elements form a self-healing mesh topology designed for maximum off-grid reliability.</string>
+    <string name="terms_content">By accessing the decentralized PIGEON network, you agree to participate in an offline peer-to-peer framework. All data is transmitted securely via local RF links. The system hosts no centralized tracking, and encryption keys remain exclusively under user custody.</string>
+    <string name="contact_info">For administrative support, custom node firmware inquiries, or emergency response deployment guides, contact the Project PIGEON research desk.</string>
+    <string name="check_updates_status">Checking for localized application packages on nearest mesh gateway...</string>
 </resources>
