@@ -6,12 +6,15 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.EditText;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.ActionBarDrawerToggle;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.view.GravityCompat;
@@ -23,7 +26,10 @@ import com.google.android.material.navigation.NavigationView;
 import com.google.android.material.tabs.TabLayout;
 import com.google.android.material.tabs.TabLayoutMediator;
 
-public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener {
+import org.json.JSONException;
+import org.json.JSONObject;
+
+public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener, PigeonService.PigeonCallback {
 
     private DrawerLayout drawerLayout;
     private ViewPager2 viewPager;
@@ -37,7 +43,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             PigeonService.LocalBinder binder = (PigeonService.LocalBinder) service;
             pigeonService = binder.getService();
             isBound = true;
-            onServiceConnectedAction();
+            pigeonService.registerCallback(MainActivity.this);
         }
 
         @Override
@@ -84,17 +90,21 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
 
         Intent intent = new Intent(this, PigeonService.class);
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
-
-        toolbar.setOnMenuItemClickListener(item -> {
-            if (item.getItemId() == R.id.action_plus) {
-                showPlusMenu();
-                return true;
-            }
-            return false;
-        });
     }
 
-    private void onServiceConnectedAction() {
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.main_toolbar_menu, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(@NonNull MenuItem item) {
+        if (item.getItemId() == R.id.action_plus) {
+            showPlusMenu();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
     }
 
     private void showPlusMenu() {
@@ -104,20 +114,97 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
 
         view.findViewById(R.id.btnConnectNewUser).setOnClickListener(v -> {
             bottomSheetDialog.dismiss();
-            Toast.makeText(MainActivity.this, R.string.plus_connect_user, Toast.LENGTH_SHORT).show();
+            promptConnectUser();
         });
 
         view.findViewById(R.id.btnJoinGroup).setOnClickListener(v -> {
             bottomSheetDialog.dismiss();
-            Toast.makeText(MainActivity.this, R.string.plus_join_group, Toast.LENGTH_SHORT).show();
+            promptJoinGroup();
         });
 
         view.findViewById(R.id.btnCreateGroup).setOnClickListener(v -> {
             bottomSheetDialog.dismiss();
-            Toast.makeText(MainActivity.this, R.string.plus_create_group, Toast.LENGTH_SHORT).show();
+            promptCreateGroup();
         });
 
         bottomSheetDialog.show();
+    }
+
+    private void promptConnectUser() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Connect with User");
+        final EditText input = new EditText(this);
+        input.setHint("Enter username");
+        builder.setView(input);
+        builder.setPositiveButton("Connect", (dialog, which) -> {
+            String username = input.getText().toString().trim();
+            if (!username.isEmpty()) {
+                sendWssEvent("connect_user", new JSONObject() {{
+                    try {
+                        put("username", username);
+                    } catch (JSONException ignored) {
+                    }
+                }});
+            }
+        });
+        builder.setNegativeButton("Cancel", null);
+        builder.show();
+    }
+
+    private void promptJoinGroup() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Join a Group");
+        final EditText input = new EditText(this);
+        input.setHint("Enter 8-digit Group ID");
+        builder.setView(input);
+        builder.setPositiveButton("Join", (dialog, which) -> {
+            String groupId = input.getText().toString().trim();
+            if (!groupId.isEmpty()) {
+                sendWssEvent("group_join", new JSONObject() {{
+                    try {
+                        put("groupId", groupId);
+                    } catch (JSONException ignored) {
+                    }
+                }});
+            }
+        });
+        builder.setNegativeButton("Cancel", null);
+        builder.show();
+    }
+
+    private void promptCreateGroup() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Create a Group");
+        final EditText input = new EditText(this);
+        input.setHint("Enter Group Name");
+        builder.setView(input);
+        builder.setPositiveButton("Create", (dialog, which) -> {
+            String groupName = input.getText().toString().trim();
+            if (!groupName.isEmpty()) {
+                sendWssEvent("group_create", new JSONObject() {{
+                    try {
+                        put("groupName", groupName);
+                    } catch (JSONException ignored) {
+                    }
+                }});
+            }
+        });
+        builder.setNegativeButton("Cancel", null);
+        builder.show();
+    }
+
+    private void sendWssEvent(String event, JSONObject data) {
+        if (isBound && pigeonService != null && pigeonService.isConnected()) {
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("event", event);
+                payload.put("data", data);
+                pigeonService.sendMessage(payload.toString());
+            } catch (JSONException ignored) {
+            }
+        } else {
+            Toast.makeText(this, "Not connected to PIGEON node", Toast.LENGTH_SHORT).show();
+        }
     }
 
     @Override
@@ -162,10 +249,52 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
 
     @Override
     protected void onDestroy() {
-        super.onDestroy();
         if (isBound) {
+            if (pigeonService != null) {
+                pigeonService.unregisterCallback(this);
+            }
             unbindService(serviceConnection);
             isBound = false;
         }
+        super.onDestroy();
+    }
+
+    @Override
+    public void onConnectionStateChanged(boolean connected, String message) {
+    }
+
+    @Override
+    public void onMessageReceived(String json) {
+        runOnUiThread(() -> {
+            try {
+                JSONObject root = new JSONObject(json);
+                String event = root.optString("event", "");
+                if ("connect_user_response".equals(event)) {
+                    JSONObject data = root.optJSONObject("data");
+                    if (data != null && data.optBoolean("success", false)) {
+                        String username = data.optString("username", "");
+                        Toast.makeText(this, "Connected with user: " + username, Toast.LENGTH_SHORT).show();
+                        pigeonService.sendMessage("{\"event\":\"get_chats\"}");
+                    }
+                } else if ("group_create_response".equals(event)) {
+                    JSONObject data = root.optJSONObject("data");
+                    if (data != null && data.optBoolean("success", false)) {
+                        String name = data.optString("groupName", "");
+                        String gid = data.optString("groupId", "");
+                        Toast.makeText(this, "Group Created: " + name + " (ID: " + gid + ")", Toast.LENGTH_LONG).show();
+                        pigeonService.sendMessage("{\"event\":\"get_groups\"}");
+                    }
+                } else if ("group_join_response".equals(event)) {
+                    JSONObject data = root.optJSONObject("data");
+                    if (data != null && data.optBoolean("success", false)) {
+                        String name = data.optString("groupName", "");
+                        String gid = data.optString("groupId", "");
+                        Toast.makeText(this, "Joined Group: " + name + " (#" + gid + ")", Toast.LENGTH_LONG).show();
+                        pigeonService.sendMessage("{\"event\":\"get_groups\"}");
+                    }
+                }
+            } catch (JSONException ignored) {
+            }
+        });
     }
 }
