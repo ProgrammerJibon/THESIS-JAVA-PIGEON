@@ -20,19 +20,15 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.util.Base64;
 import android.util.Log;
-
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
-
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.List;
-
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
-
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -70,6 +66,63 @@ public class PigeonService extends Service {
             builder.append("7");
         }
         return builder.toString();
+    }
+
+    private void establishWebSocketConnection() {
+        String wsUrl = "ws://" + gatewayIp + ":81/";
+        Request request = new Request.Builder().url(wsUrl).build();
+
+        webSocket = client.newWebSocket(request, new WebSocketListener() {
+            @Override
+            public void onOpen(@NonNull WebSocket ws, @NonNull Response response) {
+                handler.post(() -> {
+                    isConnecting = false;
+                    isConnected = true;
+                    updateNotification("Connected", "Linked to " + connectedNodeName + " mesh gateway");
+                    notifyStateChange(true, "Connected to " + connectedNodeName);
+                });
+            }
+
+            @Override
+            public void onMessage(@NonNull WebSocket ws, @NonNull final String text) {
+                handler.post(() -> {
+                    notifyMessageReceived(text);
+                });
+            }
+
+            @Override
+            public void onClosing(@NonNull WebSocket ws, int code, @NonNull String reason) {
+                ws.close(code, reason);
+            }
+
+            @Override
+            public void onClosed(@NonNull WebSocket ws, int code, @NonNull String reason) {
+                handler.post(() -> {
+                    isConnected = false;
+                    if (!isManuallyClosed) {
+                        attemptReconnection();
+                    }
+                });
+            }
+
+            @Override
+            public void onFailure(@NonNull WebSocket ws, @NonNull final Throwable t, Response response) {
+                handler.post(() -> {
+                    isConnected = false;
+                    if (!isManuallyClosed) {
+                        attemptReconnection();
+                    } else {
+                        handleConnectionFailure(t.getMessage());
+                    }
+                });
+            }
+        });
+    }
+
+    public interface PigeonCallback {
+        void onConnectionStateChanged(boolean connected, String message);
+
+        void onMessageReceived(String json);
     }
 
     @Override
@@ -135,11 +188,9 @@ public class PigeonService extends Service {
                         @Override
                         public void checkClientTrusted(X509Certificate[] chain, String authType) {
                         }
-
                         @Override
                         public void checkServerTrusted(X509Certificate[] chain, String authType) {
                         }
-
                         @Override
                         public X509Certificate[] getAcceptedIssuers() {
                             return new X509Certificate[]{};
@@ -156,6 +207,12 @@ public class PigeonService extends Service {
                     .build();
         } catch (Exception e) {
             Log.e(TAG, "SSL Init Error", e);
+        }
+    }
+
+    public class LocalBinder extends Binder {
+        public PigeonService getService() {
+            return PigeonService.this;
         }
     }
 
@@ -230,55 +287,11 @@ public class PigeonService extends Service {
         return "192.168.4.1";
     }
 
-    private void establishWebSocketConnection() {
-        String wsUrl = "wss://" + gatewayIp + ":443/";
-        Request request = new Request.Builder().url(wsUrl).build();
-
-        webSocket = client.newWebSocket(request, new WebSocketListener() {
-            @Override
-            public void onOpen(@NonNull WebSocket ws, @NonNull Response response) {
-                handler.post(() -> {
-                    isConnecting = false;
-                    isConnected = true;
-                    updateNotification("Connected", "Linked to " + connectedNodeName + " mesh gateway");
-                    notifyStateChange(true, "Connected to " + connectedNodeName);
-                });
-            }
-
-            @Override
-            public void onMessage(@NonNull WebSocket ws, @NonNull final String text) {
-                handler.post(() -> {
-                    notifyMessageReceived(text);
-                });
-            }
-
-            @Override
-            public void onClosing(@NonNull WebSocket ws, int code, @NonNull String reason) {
-                ws.close(code, reason);
-            }
-
-            @Override
-            public void onClosed(@NonNull WebSocket ws, int code, @NonNull String reason) {
-                handler.post(() -> {
-                    isConnected = false;
-                    if (!isManuallyClosed) {
-                        attemptReconnection();
-                    }
-                });
-            }
-
-            @Override
-            public void onFailure(@NonNull WebSocket ws, @NonNull final Throwable t, Response response) {
-                handler.post(() -> {
-                    isConnected = false;
-                    if (!isManuallyClosed) {
-                        attemptReconnection();
-                    } else {
-                        handleConnectionFailure(t.getMessage());
-                    }
-                });
-            }
-        });
+    public class PigeonBinder extends LocalBinder {
+        @Override
+        public PigeonService getService() {
+            return PigeonService.this;
+        }
     }
 
     private void attemptReconnection() {
@@ -364,25 +377,6 @@ public class PigeonService extends Service {
     private void notifyMessageReceived(String json) {
         for (PigeonCallback cb : callbacks) {
             cb.onMessageReceived(json);
-        }
-    }
-
-    public interface PigeonCallback {
-        void onConnectionStateChanged(boolean connected, String message);
-
-        void onMessageReceived(String json);
-    }
-
-    public class LocalBinder extends Binder {
-        public PigeonService getService() {
-            return PigeonService.this;
-        }
-    }
-
-    public class PigeonBinder extends LocalBinder {
-        @Override
-        public PigeonService getService() {
-            return PigeonService.this;
         }
     }
 }
