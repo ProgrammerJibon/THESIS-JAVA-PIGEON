@@ -12,6 +12,7 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.ActionBarDrawerToggle;
 import androidx.appcompat.app.AlertDialog;
@@ -26,16 +27,80 @@ import com.google.android.material.navigation.NavigationView;
 import com.google.android.material.tabs.TabLayout;
 import com.google.android.material.tabs.TabLayoutMediator;
 
-import org.json.JSONException;
 import org.json.JSONObject;
 
-public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener, PigeonService.PigeonCallback {
-
+public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener {
     private DrawerLayout drawerLayout;
     private ViewPager2 viewPager;
     private TabLayout tabLayout;
     private PigeonService pigeonService;
     private boolean isBound = false;
+
+    private final PigeonService.PigeonCallback callback = new PigeonService.PigeonCallback() {
+        @Override
+        public void onConnectionStateChanged(boolean connected, String message) {
+        }
+
+        @Override
+        public void onMessageReceived(String json) {
+            runOnUiThread(() -> {
+                try {
+                    JSONObject root = new JSONObject(json);
+                    String event = root.optString("event", "");
+                    if ("connect_user_response".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        boolean success = data.getBoolean("success");
+                        String username = data.getString("username");
+                        if (success) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("Connection Success")
+                                    .setMessage("Successfully established a secure off-grid link with user: " + username)
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                        } else {
+                            String err = data.optString("message", "User not found on the local node.");
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("Connection Failed")
+                                    .setMessage(err)
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                        }
+                    } else if ("group_create_response".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        boolean success = data.getBoolean("success");
+                        String groupId = data.getString("groupId");
+                        String groupName = data.getString("groupName");
+                        if (success) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("Group Network Created")
+                                    .setMessage("Group: " + groupName + "\\nGroup ID: " + groupId + "\\n\\nShare this ID with other tactical nodes to join.")
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                        }
+                    } else if ("group_join_response".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        boolean success = data.getBoolean("success");
+                        String groupId = data.getString("groupId");
+                        String groupName = data.optString("groupName", "");
+                        if (success) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("Joined Group Network")
+                                    .setMessage("Successfully joined: " + groupName + " (#" + groupId + ")")
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                        } else {
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("Group Join Failed")
+                                    .setMessage("Requested group ID was not found on this mesh node.")
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+            });
+        }
+    };
 
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
@@ -43,7 +108,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             PigeonService.LocalBinder binder = (PigeonService.LocalBinder) service;
             pigeonService = binder.getService();
             isBound = true;
-            pigeonService.registerCallback(MainActivity.this);
+            pigeonService.registerCallback(callback);
         }
 
         @Override
@@ -90,6 +155,109 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
 
         Intent intent = new Intent(this, PigeonService.class);
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
+                    drawerLayout.closeDrawer(GravityCompat.START);
+                } else {
+                    finish();
+                }
+            }
+        });
+    }
+
+    private void showPlusMenu() {
+        BottomSheetDialog bottomSheetDialog = new BottomSheetDialog(this);
+        View view = getLayoutInflater().inflate(R.layout.bottom_sheet_plus_menu, null);
+        bottomSheetDialog.setContentView(view);
+
+        view.findViewById(R.id.layoutConnectUser).setOnClickListener(v -> {
+            bottomSheetDialog.dismiss();
+            showConnectUserDialog();
+        });
+
+        view.findViewById(R.id.layoutJoinGroup).setOnClickListener(v -> {
+            bottomSheetDialog.dismiss();
+            showJoinGroupDialog();
+        });
+
+        view.findViewById(R.id.layoutCreateGroup).setOnClickListener(v -> {
+            bottomSheetDialog.dismiss();
+            showCreateGroupDialog();
+        });
+
+        bottomSheetDialog.show();
+    }
+
+    private void showConnectUserDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Connect with New User");
+        final EditText input = new EditText(this);
+        input.setHint("Enter Username");
+        builder.setView(input);
+
+        builder.setPositiveButton("Connect", (dialog, which) -> {
+            String username = input.getText().toString().trim();
+            if (!username.isEmpty()) {
+                sendWssEvent("connect_user", "username", username);
+            }
+        });
+        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
+        builder.show();
+    }
+
+    private void showJoinGroupDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Join a Group");
+        final EditText input = new EditText(this);
+        input.setHint("Enter 8-digit Group ID");
+        builder.setView(input);
+
+        builder.setPositiveButton("Join", (dialog, which) -> {
+            String groupId = input.getText().toString().trim();
+            if (groupId.length() == 8) {
+                sendWssEvent("group_join", "groupId", groupId);
+            } else {
+                Toast.makeText(MainActivity.this, "Group ID must be exactly 8 digits", Toast.LENGTH_SHORT).show();
+            }
+        });
+        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
+        builder.show();
+    }
+
+    private void showCreateGroupDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Create a Group");
+        final EditText input = new EditText(this);
+        input.setHint("Enter Group Name");
+        builder.setView(input);
+
+        builder.setPositiveButton("Create", (dialog, which) -> {
+            String groupName = input.getText().toString().trim();
+            if (!groupName.isEmpty()) {
+                sendWssEvent("group_create", "groupName", groupName);
+            }
+        });
+        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
+        builder.show();
+    }
+
+    private void sendWssEvent(String eventName, String key, String value) {
+        if (isBound && pigeonService != null && pigeonService.isConnected()) {
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("event", eventName);
+                JSONObject data = new JSONObject();
+                data.put(key, value);
+                payload.put("data", data);
+                pigeonService.sendMessage(payload.toString());
+            } catch (Exception ignored) {
+            }
+        } else {
+            Toast.makeText(this, "Not connected to any node AP", Toast.LENGTH_SHORT).show();
+        }
     }
 
     @Override
@@ -105,106 +273,6 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             return true;
         }
         return super.onOptionsItemSelected(item);
-    }
-
-    private void showPlusMenu() {
-        BottomSheetDialog bottomSheetDialog = new BottomSheetDialog(this);
-        View view = getLayoutInflater().inflate(R.layout.bottom_sheet_plus_menu, null);
-        bottomSheetDialog.setContentView(view);
-
-        view.findViewById(R.id.btnConnectNewUser).setOnClickListener(v -> {
-            bottomSheetDialog.dismiss();
-            promptConnectUser();
-        });
-
-        view.findViewById(R.id.btnJoinGroup).setOnClickListener(v -> {
-            bottomSheetDialog.dismiss();
-            promptJoinGroup();
-        });
-
-        view.findViewById(R.id.btnCreateGroup).setOnClickListener(v -> {
-            bottomSheetDialog.dismiss();
-            promptCreateGroup();
-        });
-
-        bottomSheetDialog.show();
-    }
-
-    private void promptConnectUser() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Connect with User");
-        final EditText input = new EditText(this);
-        input.setHint("Enter username");
-        builder.setView(input);
-        builder.setPositiveButton("Connect", (dialog, which) -> {
-            String username = input.getText().toString().trim();
-            if (!username.isEmpty()) {
-                sendWssEvent("connect_user", new JSONObject() {{
-                    try {
-                        put("username", username);
-                    } catch (JSONException ignored) {
-                    }
-                }});
-            }
-        });
-        builder.setNegativeButton("Cancel", null);
-        builder.show();
-    }
-
-    private void promptJoinGroup() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Join a Group");
-        final EditText input = new EditText(this);
-        input.setHint("Enter 8-digit Group ID");
-        builder.setView(input);
-        builder.setPositiveButton("Join", (dialog, which) -> {
-            String groupId = input.getText().toString().trim();
-            if (!groupId.isEmpty()) {
-                sendWssEvent("group_join", new JSONObject() {{
-                    try {
-                        put("groupId", groupId);
-                    } catch (JSONException ignored) {
-                    }
-                }});
-            }
-        });
-        builder.setNegativeButton("Cancel", null);
-        builder.show();
-    }
-
-    private void promptCreateGroup() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Create a Group");
-        final EditText input = new EditText(this);
-        input.setHint("Enter Group Name");
-        builder.setView(input);
-        builder.setPositiveButton("Create", (dialog, which) -> {
-            String groupName = input.getText().toString().trim();
-            if (!groupName.isEmpty()) {
-                sendWssEvent("group_create", new JSONObject() {{
-                    try {
-                        put("groupName", groupName);
-                    } catch (JSONException ignored) {
-                    }
-                }});
-            }
-        });
-        builder.setNegativeButton("Cancel", null);
-        builder.show();
-    }
-
-    private void sendWssEvent(String event, JSONObject data) {
-        if (isBound && pigeonService != null && pigeonService.isConnected()) {
-            try {
-                JSONObject payload = new JSONObject();
-                payload.put("event", event);
-                payload.put("data", data);
-                pigeonService.sendMessage(payload.toString());
-            } catch (JSONException ignored) {
-            }
-        } else {
-            Toast.makeText(this, "Not connected to PIGEON node", Toast.LENGTH_SHORT).show();
-        }
     }
 
     @Override
@@ -239,62 +307,14 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
     }
 
     @Override
-    public void onBackPressed() {
-        if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
-            drawerLayout.closeDrawer(GravityCompat.START);
-        } else {
-            super.onBackPressed();
-        }
-    }
-
-    @Override
     protected void onDestroy() {
+        super.onDestroy();
         if (isBound) {
             if (pigeonService != null) {
-                pigeonService.unregisterCallback(this);
+                pigeonService.unregisterCallback(callback);
             }
             unbindService(serviceConnection);
             isBound = false;
         }
-        super.onDestroy();
-    }
-
-    @Override
-    public void onConnectionStateChanged(boolean connected, String message) {
-    }
-
-    @Override
-    public void onMessageReceived(String json) {
-        runOnUiThread(() -> {
-            try {
-                JSONObject root = new JSONObject(json);
-                String event = root.optString("event", "");
-                if ("connect_user_response".equals(event)) {
-                    JSONObject data = root.optJSONObject("data");
-                    if (data != null && data.optBoolean("success", false)) {
-                        String username = data.optString("username", "");
-                        Toast.makeText(this, "Connected with user: " + username, Toast.LENGTH_SHORT).show();
-                        pigeonService.sendMessage("{\"event\":\"get_chats\"}");
-                    }
-                } else if ("group_create_response".equals(event)) {
-                    JSONObject data = root.optJSONObject("data");
-                    if (data != null && data.optBoolean("success", false)) {
-                        String name = data.optString("groupName", "");
-                        String gid = data.optString("groupId", "");
-                        Toast.makeText(this, "Group Created: " + name + " (ID: " + gid + ")", Toast.LENGTH_LONG).show();
-                        pigeonService.sendMessage("{\"event\":\"get_groups\"}");
-                    }
-                } else if ("group_join_response".equals(event)) {
-                    JSONObject data = root.optJSONObject("data");
-                    if (data != null && data.optBoolean("success", false)) {
-                        String name = data.optString("groupName", "");
-                        String gid = data.optString("groupId", "");
-                        Toast.makeText(this, "Joined Group: " + name + " (#" + gid + ")", Toast.LENGTH_LONG).show();
-                        pigeonService.sendMessage("{\"event\":\"get_groups\"}");
-                    }
-                }
-            } catch (JSONException ignored) {
-            }
-        });
     }
 }

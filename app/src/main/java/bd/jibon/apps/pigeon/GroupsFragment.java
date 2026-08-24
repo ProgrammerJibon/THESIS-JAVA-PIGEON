@@ -4,7 +4,6 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.view.LayoutInflater;
@@ -16,16 +15,12 @@ import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
-
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
-
 import java.util.ArrayList;
 import java.util.List;
 
-public class GroupsFragment extends Fragment implements PigeonService.PigeonCallback {
-
+public class GroupsFragment extends Fragment {
     private RecyclerView rvGroups;
     private View emptyView;
     private SwipeRefreshLayout swipeRefresh;
@@ -33,84 +28,105 @@ public class GroupsFragment extends Fragment implements PigeonService.PigeonCall
     private List<Group> groupList;
     private PigeonService pigeonService;
     private boolean isBound = false;
+    private String myUsername;
+    private PigeonDatabaseHelper dbHelper;
+
+    private final PigeonService.PigeonCallback callback = new PigeonService.PigeonCallback() {
+        @Override
+        public void onConnectionStateChanged(boolean connected, String message) {
+        }
+
+        @Override
+        public void onMessageReceived(String payload) {
+            if (getActivity() == null) return;
+            getActivity().runOnUiThread(() -> {
+                try {
+                    JSONObject root = new JSONObject(payload);
+                    String event = root.optString("event", "");
+                    if ("groups_list".equals(event)) {
+                        JSONArray array = root.getJSONArray("data");
+                        groupList.clear();
+                        for (int i = 0; i < array.length(); i++) {
+                            JSONObject obj = array.getJSONObject(i);
+                            String id = obj.getString("id");
+                            String name = obj.getString("name");
+                            int activeCount = obj.getInt("activeCount");
+
+                            String lastMsg = dbHelper.getLastMessageText(id);
+                            if (lastMsg.isEmpty()) lastMsg = "No messages yet";
+                            String time = dbHelper.getLastMessageTime(id);
+                            if (time.isEmpty()) time = "Now";
+
+                            groupList.add(new Group(name, id, lastMsg, time, activeCount));
+                        }
+                        adapter.notifyDataSetChanged();
+                        checkEmptyState();
+                        swipeRefresh.setRefreshing(false);
+                    }
+                } catch (Exception ignored) {
+                }
+            });
+        }
+    };
+
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             PigeonService.LocalBinder binder = (PigeonService.LocalBinder) service;
             pigeonService = binder.getService();
             isBound = true;
-            pigeonService.registerCallback(GroupsFragment.this);
-            fetchGroups();
+            pigeonService.registerCallback(callback);
+            refreshList();
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             isBound = false;
-            pigeonService = null;
         }
     };
-    private SharedPreferences prefs;
 
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_groups, container, false);
+
         rvGroups = view.findViewById(R.id.rvGroups);
         emptyView = view.findViewById(R.id.layoutEmptyGroups);
         swipeRefresh = view.findViewById(R.id.swipeRefreshGroups);
 
-        rvGroups.setLayoutManager(new LinearLayoutManager(getContext()));
+        dbHelper = new PigeonDatabaseHelper(getContext());
+        myUsername = getContext().getSharedPreferences("PigeonPrefs", Context.MODE_PRIVATE).getString("username", "OFFLINE_NODE");
+
         groupList = new ArrayList<>();
         adapter = new GroupAdapter(groupList);
+        rvGroups.setLayoutManager(new LinearLayoutManager(getContext()));
         rvGroups.setAdapter(adapter);
 
-        prefs = requireActivity().getSharedPreferences("PigeonPrefs", Context.MODE_PRIVATE);
-
-        swipeRefresh.setOnRefreshListener(this::fetchGroups);
+        swipeRefresh.setOnRefreshListener(this::refreshList);
 
         Intent intent = new Intent(getContext(), PigeonService.class);
-        requireActivity().bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+        getContext().bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
 
-        loadLocalGroups();
+        checkEmptyState();
         return view;
     }
 
-    @Override
-    public void onDestroyView() {
-        if (isBound) {
-            if (pigeonService != null) {
-                pigeonService.unregisterCallback(this);
-            }
-            requireActivity().unbindService(serviceConnection);
-            isBound = false;
-        }
-        super.onDestroyView();
-    }
-
-    private void fetchGroups() {
-        swipeRefresh.setRefreshing(true);
+    private void refreshList() {
         if (isBound && pigeonService != null && pigeonService.isConnected()) {
-            pigeonService.sendMessage("{\"event\":\"get_groups\"}");
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("event", "get_groups");
+                JSONObject data = new JSONObject();
+                data.put("username", myUsername);
+                payload.put("data", data);
+                pigeonService.sendMessage(payload.toString());
+                swipeRefresh.setRefreshing(true);
+            } catch (Exception ignored) {
+                swipeRefresh.setRefreshing(false);
+            }
         } else {
             swipeRefresh.setRefreshing(false);
         }
-    }
-
-    private void loadLocalGroups() {
-        groupList.clear();
-        String json = prefs.getString("active_groups_list", "[]");
-        try {
-            JSONArray arr = new JSONArray(json);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject obj = arr.getJSONObject(i);
-                String groupId = obj.optString("groupId", "");
-                String groupName = obj.optString("groupName", "Tactical Channel");
-                groupList.add(new Group(groupName, groupId, "No group updates", "Now", 0));
-            }
-        } catch (JSONException ignored) {
-        }
-        adapter.notifyDataSetChanged();
-        checkEmptyState();
     }
 
     private void checkEmptyState() {
@@ -124,25 +140,20 @@ public class GroupsFragment extends Fragment implements PigeonService.PigeonCall
     }
 
     @Override
-    public void onConnectionStateChanged(boolean connected, String message) {
-        if (connected) {
-            fetchGroups();
-        }
+    public void onResume() {
+        super.onResume();
+        refreshList();
     }
 
     @Override
-    public void onMessageReceived(String json) {
-        if (getActivity() == null) return;
-        getActivity().runOnUiThread(() -> {
-            try {
-                JSONObject root = new JSONObject(json);
-                String event = root.optString("event", "");
-                if ("get_groups_response".equals(event) || "group_create_response".equals(event) || "group_join_response".equals(event)) {
-                    swipeRefresh.setRefreshing(false);
-                    loadLocalGroups();
-                }
-            } catch (JSONException ignored) {
+    public void onDestroyView() {
+        super.onDestroyView();
+        if (isBound) {
+            if (pigeonService != null) {
+                pigeonService.unregisterCallback(callback);
             }
-        });
+            getContext().unbindService(serviceConnection);
+            isBound = false;
+        }
     }
 }

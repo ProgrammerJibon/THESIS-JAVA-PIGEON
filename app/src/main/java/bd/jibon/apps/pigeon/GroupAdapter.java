@@ -5,10 +5,10 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
-
+import android.widget.Toast;
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.recyclerview.widget.RecyclerView;
-
 import java.util.List;
 
 public class GroupAdapter extends RecyclerView.Adapter<GroupAdapter.GroupViewHolder> {
@@ -61,6 +61,29 @@ public class GroupAdapter extends RecyclerView.Adapter<GroupAdapter.GroupViewHol
                 intent.putExtra("groupId", group.getGroupId());
                 intent.putExtra("groupName", group.getGroupName());
                 itemView.getContext().startActivity(intent);
+            });
+
+            itemView.setOnLongClickListener(v -> {
+                String[] options = {"View Group Authority", "Leave Group", "Purge Database History"};
+                new AlertDialog.Builder(itemView.getContext())
+                        .setTitle("Manage Group Network")
+                        .setItems(options, (dialog, which) -> {
+                            if (which == 0) {
+                                new AlertDialog.Builder(itemView.getContext())
+                                        .setTitle("Group Registry Authority")
+                                        .setMessage("Group Name: " + group.getGroupName() + "\nID: " + group.getGroupId() + "\nAuthority Status: Decentralized Sync Active")
+                                        .setPositiveButton("OK", null)
+                                        .show();
+                            } else if (which == 1) {
+                                Toast.makeText(itemView.getContext(), "Left Group", Toast.LENGTH_SHORT).show();
+                            } else if (which == 2) {
+                                PigeonDatabaseHelper dbHelper = new PigeonDatabaseHelper(itemView.getContext());
+                                dbHelper.clearHistory(group.getGroupId());
+                                Toast.makeText(itemView.getContext(), "Local group database history purged", Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .show();
+                return true;
             });
         }
     }

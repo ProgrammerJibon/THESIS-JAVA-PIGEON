@@ -7,7 +7,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
@@ -21,6 +20,7 @@ public class ProfileFragment extends Fragment {
     private TextView tvTunnelsCount;
     private TextView tvGroupsCount;
     private RecyclerView rvMediaGrid;
+    private PigeonDatabaseHelper dbHelper;
 
     @Nullable
     @Override
@@ -32,6 +32,7 @@ public class ProfileFragment extends Fragment {
         tvTunnelsCount = view.findViewById(R.id.tvTotalChats);
         tvGroupsCount = view.findViewById(R.id.tvTotalGroups);
         rvMediaGrid = view.findViewById(R.id.rvProfileMedia);
+        dbHelper = new PigeonDatabaseHelper(getContext());
 
         rvMediaGrid.setLayoutManager(new GridLayoutManager(getContext(), 3));
 
@@ -46,7 +47,9 @@ public class ProfileFragment extends Fragment {
             String nodeId = prefs.getString("node_id", "A1-FF");
             tvProfileUsername.setText(username);
             tvNodeAddress.setText("node://" + nodeId.toLowerCase());
-            tvTunnelsCount.setText("0");
+
+            int totalSessions = dbHelper.getSessionCount();
+            tvTunnelsCount.setText(String.valueOf(totalSessions));
             tvGroupsCount.setText("0");
         }
     }

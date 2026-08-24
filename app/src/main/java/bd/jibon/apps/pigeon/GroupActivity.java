@@ -4,19 +4,30 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.util.Base64;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -29,6 +40,17 @@ public class GroupActivity extends AppCompatActivity {
     private RecyclerView rvMessages;
     private MessageAdapter adapter;
     private List<Message> messageList;
+
+    private final ActivityResultLauncher<Intent> imagePickerLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    Uri imageUri = result.getData().getData();
+                    processAndSendImage(imageUri);
+                }
+            }
+    );
+
     private final PigeonService.PigeonCallback callback = new PigeonService.PigeonCallback() {
         @Override
         public void onConnectionStateChanged(boolean connected, String message) {
@@ -110,37 +132,76 @@ public class GroupActivity extends AppCompatActivity {
         btnSend.setOnClickListener(v -> {
             String text = etInput.getText().toString().trim();
             if (!text.isEmpty()) {
-                if (isBound && pigeonService != null) {
-                    pigeonService.sendWssMessage(text);
-                }
-                Message m = new Message("Me", text, "Now", true);
-                messageList.add(m);
-                adapter.notifyItemInserted(messageList.size() - 1);
-                rvMessages.scrollToPosition(messageList.size() - 1);
+                transmitGroupPayload(text, "text");
                 etInput.setText("");
             }
         });
 
         btnAttachImage.setOnClickListener(v -> {
-            Message m = new Message("Me", "IMAGE_PLACEHOLDER_BASE64", "Now", true, Message.TYPE_IMAGE);
-            messageList.add(m);
-            adapter.notifyItemInserted(messageList.size() - 1);
-            rvMessages.scrollToPosition(messageList.size() - 1);
+            Intent intent = new Intent(Intent.ACTION_PICK);
+            intent.setType("image/*");
+            imagePickerLauncher.launch(intent);
             layoutAttachments.setVisibility(View.GONE);
             btnToggleActions.setImageResource(R.drawable.ic_add);
         });
 
         btnAttachLocation.setOnClickListener(v -> {
-            Message m = new Message("Me", 23.8103, 90.4125, "Now", true);
-            messageList.add(m);
-            adapter.notifyItemInserted(messageList.size() - 1);
-            rvMessages.scrollToPosition(messageList.size() - 1);
+            transmitGroupPayload("GPS: 23.8103, 90.4125", "location");
             layoutAttachments.setVisibility(View.GONE);
             btnToggleActions.setImageResource(R.drawable.ic_add);
         });
 
         Intent intent = new Intent(this, PigeonService.class);
         bindService(intent, connection, Context.BIND_AUTO_CREATE);
+    }
+
+    private void processAndSendImage(Uri imageUri) {
+        try {
+            InputStream inputStream = getContentResolver().openInputStream(imageUri);
+            Bitmap originalBitmap = BitmapFactory.decodeStream(inputStream);
+            int width = originalBitmap.getWidth();
+            int height = originalBitmap.getHeight();
+            if (width > 512 || height > 512) {
+                float ratio = Math.min((float) 512 / width, (float) 512 / height);
+                width = Math.round(width * ratio);
+                height = Math.round(height * ratio);
+            }
+            Bitmap resizedBitmap = Bitmap.createScaledBitmap(originalBitmap, width, height, true);
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            resizedBitmap.compress(Bitmap.CompressFormat.JPEG, 50, outputStream);
+            byte[] byteArray = outputStream.toByteArray();
+            String base64Image = Base64.encodeToString(byteArray, Base64.NO_WRAP);
+            transmitGroupPayload(base64Image, "image");
+        } catch (Exception e) {
+            Toast.makeText(this, "Image processing failed", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void transmitGroupPayload(String dataStr, String type) {
+        if (isBound && pigeonService != null) {
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("event", "group_message");
+                JSONObject data = new JSONObject();
+                data.put("groupId", groupId);
+                data.put("text", dataStr);
+                data.put("type", type);
+                payload.put("data", data);
+                pigeonService.sendWssMessage(payload.toString());
+            } catch (Exception ignored) {
+            }
+        }
+        Message m;
+        if ("image".equals(type)) {
+            m = new Message("Me", dataStr, "Now", true, Message.TYPE_IMAGE);
+        } else if ("location".equals(type)) {
+            m = new Message("Me", 23.8103, 90.4125, "Now", true);
+        } else {
+            m = new Message("Me", dataStr, "Now", true);
+        }
+        messageList.add(m);
+        adapter.notifyItemInserted(messageList.size() - 1);
+        rvMessages.scrollToPosition(messageList.size() - 1);
     }
 
     @Override

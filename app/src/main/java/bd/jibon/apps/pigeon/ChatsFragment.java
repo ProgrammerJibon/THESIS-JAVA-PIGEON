@@ -4,7 +4,6 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.view.LayoutInflater;
@@ -16,15 +15,12 @@ import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
-
 import org.json.JSONArray;
-import org.json.JSONException;
-
+import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 
-public class ChatsFragment extends Fragment implements PigeonService.PigeonCallback {
-
+public class ChatsFragment extends Fragment {
     private RecyclerView rvChats;
     private View emptyView;
     private SwipeRefreshLayout swipeRefresh;
@@ -32,82 +28,104 @@ public class ChatsFragment extends Fragment implements PigeonService.PigeonCallb
     private List<Chat> chatList;
     private PigeonService pigeonService;
     private boolean isBound = false;
+    private String myUsername;
+    private PigeonDatabaseHelper dbHelper;
+
+    private final PigeonService.PigeonCallback callback = new PigeonService.PigeonCallback() {
+        @Override
+        public void onConnectionStateChanged(boolean connected, String message) {
+        }
+
+        @Override
+        public void onMessageReceived(String payload) {
+            if (getActivity() == null) return;
+            getActivity().runOnUiThread(() -> {
+                try {
+                    JSONObject root = new JSONObject(payload);
+                    String event = root.optString("event", "");
+                    if ("connections_list".equals(event)) {
+                        JSONArray array = root.getJSONArray("data");
+                        chatList.clear();
+                        for (int i = 0; i < array.length(); i++) {
+                            JSONObject obj = array.getJSONObject(i);
+                            String username = obj.getString("username");
+                            boolean active = obj.getBoolean("active");
+
+                            String lastMsg = dbHelper.getLastMessageText(username);
+                            if (lastMsg.isEmpty()) lastMsg = "No messages yet";
+                            String time = dbHelper.getLastMessageTime(username);
+                            if (time.isEmpty()) time = "Now";
+
+                            chatList.add(new Chat(username, lastMsg, time, active));
+                        }
+                        adapter.notifyDataSetChanged();
+                        checkEmptyState();
+                        swipeRefresh.setRefreshing(false);
+                    }
+                } catch (Exception ignored) {
+                }
+            });
+        }
+    };
+
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             PigeonService.LocalBinder binder = (PigeonService.LocalBinder) service;
             pigeonService = binder.getService();
             isBound = true;
-            pigeonService.registerCallback(ChatsFragment.this);
-            fetchChats();
+            pigeonService.registerCallback(callback);
+            refreshList();
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             isBound = false;
-            pigeonService = null;
         }
     };
-    private SharedPreferences prefs;
 
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_chats, container, false);
+
         rvChats = view.findViewById(R.id.rvChats);
         emptyView = view.findViewById(R.id.layoutEmptyChats);
         swipeRefresh = view.findViewById(R.id.swipeRefreshChats);
 
-        rvChats.setLayoutManager(new LinearLayoutManager(getContext()));
+        dbHelper = new PigeonDatabaseHelper(getContext());
+        myUsername = getContext().getSharedPreferences("PigeonPrefs", Context.MODE_PRIVATE).getString("username", "OFFLINE_NODE");
+
         chatList = new ArrayList<>();
-        adapter = new ChatAdapter(chatList);
+        adapter = new ChatAdapter(getContext(), chatList);
+        rvChats.setLayoutManager(new LinearLayoutManager(getContext()));
         rvChats.setAdapter(adapter);
 
-        prefs = requireActivity().getSharedPreferences("PigeonPrefs", Context.MODE_PRIVATE);
-
-        swipeRefresh.setOnRefreshListener(this::fetchChats);
+        swipeRefresh.setOnRefreshListener(this::refreshList);
 
         Intent intent = new Intent(getContext(), PigeonService.class);
-        requireActivity().bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+        getContext().bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
 
-        loadLocalChats();
+        checkEmptyState();
         return view;
     }
 
-    @Override
-    public void onDestroyView() {
-        if (isBound) {
-            if (pigeonService != null) {
-                pigeonService.unregisterCallback(this);
-            }
-            requireActivity().unbindService(serviceConnection);
-            isBound = false;
-        }
-        super.onDestroyView();
-    }
-
-    private void fetchChats() {
-        swipeRefresh.setRefreshing(true);
+    private void refreshList() {
         if (isBound && pigeonService != null && pigeonService.isConnected()) {
-            pigeonService.sendMessage("{\"event\":\"get_chats\"}");
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("event", "get_connections");
+                JSONObject data = new JSONObject();
+                data.put("username", myUsername);
+                payload.put("data", data);
+                pigeonService.sendMessage(payload.toString());
+                swipeRefresh.setRefreshing(true);
+            } catch (Exception ignored) {
+                swipeRefresh.setRefreshing(false);
+            }
         } else {
             swipeRefresh.setRefreshing(false);
         }
-    }
-
-    private void loadLocalChats() {
-        chatList.clear();
-        String json = prefs.getString("active_chats_list", "[]");
-        try {
-            JSONArray arr = new JSONArray(json);
-            for (int i = 0; i < arr.length(); i++) {
-                String username = arr.getString(i);
-                chatList.add(new Chat(username, "Secure offline channel", "Now", true));
-            }
-        } catch (JSONException ignored) {
-        }
-        adapter.notifyDataSetChanged();
-        checkEmptyState();
     }
 
     private void checkEmptyState() {
@@ -121,25 +139,20 @@ public class ChatsFragment extends Fragment implements PigeonService.PigeonCallb
     }
 
     @Override
-    public void onConnectionStateChanged(boolean connected, String message) {
-        if (connected) {
-            fetchChats();
-        }
+    public void onResume() {
+        super.onResume();
+        refreshList();
     }
 
     @Override
-    public void onMessageReceived(String json) {
-        if (getActivity() == null) return;
-        getActivity().runOnUiThread(() -> {
-            try {
-                org.json.JSONObject root = new org.json.JSONObject(json);
-                String event = root.optString("event", "");
-                if ("get_chats_response".equals(event) || "connect_user_response".equals(event)) {
-                    swipeRefresh.setRefreshing(false);
-                    loadLocalChats();
-                }
-            } catch (JSONException ignored) {
+    public void onDestroyView() {
+        super.onDestroyView();
+        if (isBound) {
+            if (pigeonService != null) {
+                pigeonService.unregisterCallback(callback);
             }
-        });
+            getContext().unbindService(serviceConnection);
+            isBound = false;
+        }
     }
 }
