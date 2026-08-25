@@ -49,18 +49,24 @@ public class ChatsFragment extends Fragment {
                         for (int i = 0; i < array.length(); i++) {
                             JSONObject obj = array.getJSONObject(i);
                             String username = obj.getString("username");
-                            boolean active = obj.getBoolean("active");
-
+                            boolean active = obj.optBoolean("active", false);
+                            boolean blockedByMe = obj.optBoolean("blockedByMe", false);
+                            boolean blockedByPeer = obj.optBoolean("blockedByPeer", false);
+                            
                             String lastMsg = dbHelper.getLastMessageText(username);
                             if (lastMsg.isEmpty()) lastMsg = "No messages yet";
                             String time = dbHelper.getLastMessageTime(username);
                             if (time.isEmpty()) time = "Now";
 
-                            chatList.add(new Chat(username, lastMsg, time, active));
+                            chatList.add(new Chat(username, lastMsg, time, active, blockedByMe, blockedByPeer));
                         }
                         adapter.notifyDataSetChanged();
                         checkEmptyState();
                         swipeRefresh.setRefreshing(false);
+                    } else if ("delete_chat".equals(event)) {
+                        String peer = root.getJSONObject("data").getString("peer");
+                        dbHelper.clearHistory(peer);
+                        refreshList();
                     }
                 } catch (Exception ignored) {
                 }
@@ -75,6 +81,7 @@ public class ChatsFragment extends Fragment {
             pigeonService = binder.getService();
             isBound = true;
             pigeonService.registerCallback(callback);
+            adapter.setPigeonService(pigeonService);
             refreshList();
         }
 
@@ -97,7 +104,7 @@ public class ChatsFragment extends Fragment {
         myUsername = getContext().getSharedPreferences("PigeonPrefs", Context.MODE_PRIVATE).getString("username", "OFFLINE_NODE");
 
         chatList = new ArrayList<>();
-        adapter = new ChatAdapter(getContext(), chatList);
+        adapter = new ChatAdapter(getContext(), chatList, myUsername);
         rvChats.setLayoutManager(new LinearLayoutManager(getContext()));
         rvChats.setAdapter(adapter);
 

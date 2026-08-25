@@ -35,6 +35,68 @@
                 android:textStyle="bold"
                 android:visibility="gone" />
 
+            <ImageView
+                android:id="@+id/ivMessageRecvImage"
+                android:layout_width="200dp"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:adjustViewBounds="true"
+                android:maxHeight="250dp"
+                android:scaleType="centerCrop"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/layoutLocationRecv"
+                android:layout_width="200dp"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tvLocationHeaderRecv"
+                    style="@style/PigeonText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/colorTextReceive"
+                    android:textSize="12sp"
+                    android:textStyle="italic" />
+
+                <TextView
+                    android:id="@+id/tvLocationCoordsRecv"
+                    style="@style/PigeonText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="8dp"
+                    android:textColor="@color/colorTextReceive"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnMessageRecvMap"
+                    style="@style/PigeonButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="Open in Maps"
+                    android:textColor="@color/colorOnPrimary"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btnMessageRecvCopy"
+                    style="@style/PigeonButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:layout_marginTop="4dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="Copy Coordinates"
+                    android:textColor="@color/colorOnPrimary"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
             <TextView
                 android:id="@+id/tvMessageRecvText"
                 style="@style/PigeonText"

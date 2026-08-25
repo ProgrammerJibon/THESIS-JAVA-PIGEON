@@ -23,6 +23,69 @@
             android:paddingHorizontal="16dp"
             android:paddingVertical="10dp">
 
+            <ImageView
+                android:id="@+id/ivMessageSendImage"
+                android:layout_width="200dp"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:adjustViewBounds="true"
+                android:maxHeight="250dp"
+                android:scaleType="centerCrop"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/layoutLocationSend"
+                android:layout_width="200dp"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tvLocationHeaderSend"
+                    style="@style/PigeonText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="You sent a location"
+                    android:textColor="@color/colorTextSend"
+                    android:textSize="12sp"
+                    android:textStyle="italic" />
+
+                <TextView
+                    android:id="@+id/tvLocationCoordsSend"
+                    style="@style/PigeonText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="8dp"
+                    android:textColor="@color/colorTextSend"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnMessageSendMap"
+                    style="@style/PigeonButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="Open in Maps"
+                    android:textColor="@color/colorOnPrimary"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btnMessageSendCopy"
+                    style="@style/PigeonButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:layout_marginTop="4dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="Copy Coordinates"
+                    android:textColor="@color/colorOnPrimary"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
             <TextView
                 android:id="@+id/tvMessageSendText"
                 style="@style/PigeonText"

@@ -22,13 +22,15 @@ public class Message {
         this.type = TYPE_TEXT;
     }
 
-    public Message(String sender, String imageBase64, String timestamp, boolean isSent, int type) {
+    public Message(String sender, String payload, String timestamp, boolean isSent, int type) {
         this.sender = sender;
         this.timestamp = timestamp;
         this.isSent = isSent;
         this.type = type;
         if (type == TYPE_IMAGE) {
-            this.imageBase64 = imageBase64;
+            this.imageBase64 = payload;
+        } else {
+            this.text = payload;
         }
     }
 

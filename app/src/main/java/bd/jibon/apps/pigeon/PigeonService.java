@@ -19,16 +19,13 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Base64;
-import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
+
+import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
+import java.util.concurrent.TimeUnit;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -37,7 +34,6 @@ import okhttp3.WebSocketListener;
 
 public class PigeonService extends Service {
 
-    private static final String TAG = "PigeonService";
     private static final String CHANNEL_ID = "PigeonServiceChannel";
     private static final int NOTIFICATION_ID = 101;
 
@@ -55,6 +51,7 @@ public class PigeonService extends Service {
     private boolean isConnecting = false;
     private boolean isConnected = false;
     private boolean isManuallyClosed = false;
+    private PigeonDatabaseHelper dbHelper;
 
     public static String generatePassword(String deviceName) {
         String base64 = Base64.encodeToString(deviceName.getBytes(), Base64.NO_WRAP);
@@ -85,6 +82,34 @@ public class PigeonService extends Service {
 
             @Override
             public void onMessage(@NonNull WebSocket ws, @NonNull final String text) {
+                try {
+                    JSONObject root = new JSONObject(text);
+                    String event = root.optString("event", "");
+                    if ("message".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        String sender = data.getString("sender");
+                        String receiver = data.getString("receiver");
+                        String msgText = data.optString("text", "");
+                        String timestamp = data.getString("timestamp");
+                        String type = data.optString("type", "text");
+                        String myUsername = getSharedPreferences("PigeonPrefs", MODE_PRIVATE).getString("username", "");
+
+                        if (myUsername.equals(receiver)) {
+                            dbHelper.insertMessage(sender, sender, receiver, msgText, timestamp, false, type, true);
+
+                            JSONObject delResp = new JSONObject();
+                            delResp.put("event", "msg_delivered");
+                            JSONObject dData = new JSONObject();
+                            dData.put("receiver", sender);
+                            delResp.put("data", dData);
+                            sendMessage(delResp.toString());
+
+                            updateNotification("New Secure Message", "Encrypted payload received from " + sender);
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+
                 handler.post(() -> {
                     notifyMessageReceived(text);
                 });
@@ -121,13 +146,13 @@ public class PigeonService extends Service {
 
     public interface PigeonCallback {
         void onConnectionStateChanged(boolean connected, String message);
-
         void onMessageReceived(String json);
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
+        dbHelper = new PigeonDatabaseHelper(this);
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, buildNotification("Disconnected", "Not connected to any node"));
         connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -182,32 +207,12 @@ public class PigeonService extends Service {
     }
 
     private void initOkHttpClient() {
-        try {
-            TrustManager[] trustAllCerts = new TrustManager[]{
-                    new X509TrustManager() {
-                        @Override
-                        public void checkClientTrusted(X509Certificate[] chain, String authType) {
-                        }
-                        @Override
-                        public void checkServerTrusted(X509Certificate[] chain, String authType) {
-                        }
-                        @Override
-                        public X509Certificate[] getAcceptedIssuers() {
-                            return new X509Certificate[]{};
-                        }
-                    }
-            };
-
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-            sslContext.init(null, trustAllCerts, new SecureRandom());
-
-            client = new OkHttpClient.Builder()
-                    .sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) trustAllCerts[0])
-                    .hostnameVerifier((hostname, session) -> true)
-                    .build();
-        } catch (Exception e) {
-            Log.e(TAG, "SSL Init Error", e);
-        }
+        client = new OkHttpClient.Builder()
+                .connectTimeout(2, TimeUnit.SECONDS)
+                .readTimeout(2, TimeUnit.SECONDS)
+                .writeTimeout(2, TimeUnit.SECONDS)
+                .pingInterval(4, TimeUnit.SECONDS)
+                .build();
     }
 
     public class LocalBinder extends Binder {
@@ -217,13 +222,25 @@ public class PigeonService extends Service {
     }
 
     public void connectToNode(final String nodeName) {
-        if (isConnecting || isConnected) {
-            return;
-        }
         isConnecting = true;
+        isConnected = false;
         isManuallyClosed = false;
         connectedNodeName = nodeName;
+
+        if (webSocket != null) {
+            webSocket.cancel();
+            webSocket = null;
+        }
+
+        if (networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (Exception ignored) {
+            }
+        }
+
         updateNotification("Connecting", "Locating PIGEON Node " + nodeName);
+        notifyStateChange(false, "Locating PIGEON Node " + nodeName + "...");
 
         WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder()
                 .setSsid(nodeName)
@@ -236,20 +253,19 @@ public class PigeonService extends Service {
                 .setNetworkSpecifier(specifier)
                 .build();
 
-        if (networkCallback != null) {
-            try {
-                connectivityManager.unregisterNetworkCallback(networkCallback);
-            } catch (Exception ignored) {
-            }
-        }
-
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(@NonNull Network network) {
                 super.onAvailable(network);
                 connectivityManager.bindProcessToNetwork(network);
                 gatewayIp = extractGatewayIp(network);
-                handler.post(() -> establishWebSocketConnection());
+                handler.post(() -> notifyStateChange(false, "WiFi bound. Verifying route..."));
+                handler.postDelayed(() -> {
+                    if (!isManuallyClosed) {
+                        notifyStateChange(false, "Initializing WSS link...");
+                        establishWebSocketConnection();
+                    }
+                }, 1000);
             }
 
             @Override
@@ -302,10 +318,10 @@ public class PigeonService extends Service {
         updateNotification("Reconnecting", "Attempting automatic link recovery...");
         notifyStateChange(false, "Reconnecting...");
         handler.postDelayed(() -> {
-            if (isConnecting && !isConnected && !isManuallyClosed) {
+            if (!isConnected && !isManuallyClosed) {
                 establishWebSocketConnection();
             }
-        }, 5000);
+        }, 1000);
     }
 
     private void handleConnectionFailure(String error) {

@@ -10,15 +10,16 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.view.Gravity;
 import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
-
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-
 import com.google.android.material.textfield.TextInputEditText;
-
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -33,6 +34,8 @@ public class ConnectionActivity extends AppCompatActivity implements PigeonServi
     private PigeonService pigeonService;
     private boolean isBound = false;
     private SharedPreferences prefs;
+    private AlertDialog loadingDialog;
+    private TextView tvLoadingMessage;
 
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
@@ -69,8 +72,52 @@ public class ConnectionActivity extends AppCompatActivity implements PigeonServi
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
     }
 
+    private void showLoadingDialog(String message) {
+        runOnUiThread(() -> {
+            if (loadingDialog == null) {
+                LinearLayout layout = new LinearLayout(this);
+                layout.setOrientation(LinearLayout.HORIZONTAL);
+                layout.setPadding(60, 60, 60, 60);
+                layout.setGravity(Gravity.CENTER_VERTICAL);
+
+                ProgressBar progressBar = new ProgressBar(this);
+                layout.addView(progressBar);
+
+                tvLoadingMessage = new TextView(this);
+                tvLoadingMessage.setText(message);
+                tvLoadingMessage.setTextSize(16);
+                tvLoadingMessage.setPadding(50, 0, 0, 0);
+                layout.addView(tvLoadingMessage);
+
+                AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                builder.setCancelable(true);
+                builder.setOnCancelListener(dialog -> {
+                    if (pigeonService != null) {
+                        pigeonService.disconnect();
+                    }
+                });
+                builder.setView(layout);
+                loadingDialog = builder.create();
+            } else if (tvLoadingMessage != null) {
+                tvLoadingMessage.setText(message);
+            }
+            if (!loadingDialog.isShowing()) {
+                loadingDialog.show();
+            }
+        });
+    }
+
+    private void hideLoadingDialog() {
+        runOnUiThread(() -> {
+            if (loadingDialog != null && loadingDialog.isShowing()) {
+                loadingDialog.dismiss();
+            }
+        });
+    }
+
     @Override
     protected void onDestroy() {
+        hideLoadingDialog();
         if (isBound) {
             if (pigeonService != null) {
                 pigeonService.unregisterCallback(this);
@@ -129,6 +176,7 @@ public class ConnectionActivity extends AppCompatActivity implements PigeonServi
             return;
         }
         if (isBound && pigeonService != null) {
+            showLoadingDialog("Connecting to PIGEON Mesh...");
             pigeonService.connectToNode(deviceId);
         }
     }
@@ -137,6 +185,7 @@ public class ConnectionActivity extends AppCompatActivity implements PigeonServi
         String savedDevice = prefs.getString("saved_device_name", "");
         if (!savedDevice.isEmpty() && isBound && pigeonService != null) {
             etDeviceId.setText(savedDevice);
+            showLoadingDialog("Auto-connecting to " + savedDevice + "...");
             pigeonService.connectToNode(savedDevice);
         }
     }
@@ -146,9 +195,17 @@ public class ConnectionActivity extends AppCompatActivity implements PigeonServi
         runOnUiThread(() -> {
             tvStatus.setText(message);
             if (connected) {
+                hideLoadingDialog();
                 String nodeName = pigeonService.getConnectedNodeName();
                 prefs.edit().putString("saved_device_name", nodeName).apply();
                 checkTokenAndNavigate();
+            } else {
+                String msgLower = message.toLowerCase();
+                if (msgLower.contains("fail") || msgLower.contains("timeout") || msgLower.contains("lost") || msgLower.contains("disconnected manually") || msgLower.equals("disconnected")) {
+                    hideLoadingDialog();
+                } else if (msgLower.contains("connecting") || msgLower.contains("locating") || msgLower.contains("bound") || msgLower.contains("initializing") || msgLower.contains("reconnecting")) {
+                    showLoadingDialog(message);
+                }
             }
         });
     }

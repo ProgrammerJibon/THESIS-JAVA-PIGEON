@@ -1,11 +1,15 @@
 package bd.jibon.apps.pigeon;
 
+import android.Manifest;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.location.Location;
+import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -16,16 +20,14 @@ import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.Toast;
-
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-
 import org.json.JSONObject;
-
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -51,6 +53,19 @@ public class GroupActivity extends AppCompatActivity {
             }
     );
 
+    private final ActivityResultLauncher<String[]> locationPermissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestMultiplePermissions(),
+            result -> {
+                Boolean fine = result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false);
+                Boolean coarse = result.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false);
+                if ((fine != null && fine) || (coarse != null && coarse)) {
+                    fetchAndSendLocation();
+                } else {
+                    Toast.makeText(this, "Location permission denied", Toast.LENGTH_SHORT).show();
+                }
+            }
+    );
+
     private final PigeonService.PigeonCallback callback = new PigeonService.PigeonCallback() {
         @Override
         public void onConnectionStateChanged(boolean connected, String message) {
@@ -59,10 +74,29 @@ public class GroupActivity extends AppCompatActivity {
         @Override
         public void onMessageReceived(String payload) {
             runOnUiThread(() -> {
-                Message m = new Message("Alpha_Two", payload, "Now", false);
-                messageList.add(m);
-                adapter.notifyItemInserted(messageList.size() - 1);
-                rvMessages.scrollToPosition(messageList.size() - 1);
+                try {
+                    JSONObject root = new JSONObject(payload);
+                    String event = root.optString("event", "");
+                    if ("group_message".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        String sender = data.getString("sender");
+                        String text = data.optString("text", "");
+                        String type = data.optString("type", "text");
+
+                        Message m;
+                        if ("image".equals(type)) {
+                            m = new Message(sender, text, "Now", false, Message.TYPE_IMAGE);
+                        } else if ("location".equals(type)) {
+                            m = new Message(sender, text, "Now", false, Message.TYPE_LOCATION);
+                        } else {
+                            m = new Message(sender, text, "Now", false);
+                        }
+                        messageList.add(m);
+                        adapter.notifyItemInserted(messageList.size() - 1);
+                        rvMessages.scrollToPosition(messageList.size() - 1);
+                    }
+                } catch (Exception ignored) {
+                }
             });
         }
     };
@@ -146,13 +180,39 @@ public class GroupActivity extends AppCompatActivity {
         });
 
         btnAttachLocation.setOnClickListener(v -> {
-            transmitGroupPayload("GPS: 23.8103, 90.4125", "location");
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                fetchAndSendLocation();
+            } else {
+                locationPermissionLauncher.launch(new String[]{
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                });
+            }
             layoutAttachments.setVisibility(View.GONE);
             btnToggleActions.setImageResource(R.drawable.ic_add);
         });
 
         Intent intent = new Intent(this, PigeonService.class);
         bindService(intent, connection, Context.BIND_AUTO_CREATE);
+    }
+
+    private void fetchAndSendLocation() {
+        try {
+            LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (locationManager != null) {
+                Location location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                if (location == null) {
+                    location = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                }
+                if (location != null) {
+                    String locStr = "GPS: " + location.getLatitude() + ", " + location.getLongitude();
+                    transmitGroupPayload(locStr, "location");
+                } else {
+                    Toast.makeText(this, "Unable to get location. Try opening Maps first.", Toast.LENGTH_SHORT).show();
+                }
+            }
+        } catch (SecurityException ignored) {
+        }
     }
 
     private void processAndSendImage(Uri imageUri) {
@@ -195,7 +255,7 @@ public class GroupActivity extends AppCompatActivity {
         if ("image".equals(type)) {
             m = new Message("Me", dataStr, "Now", true, Message.TYPE_IMAGE);
         } else if ("location".equals(type)) {
-            m = new Message("Me", 23.8103, 90.4125, "Now", true);
+            m = new Message("Me", dataStr, "Now", true, Message.TYPE_LOCATION);
         } else {
             m = new Message("Me", dataStr, "Now", true);
         }
