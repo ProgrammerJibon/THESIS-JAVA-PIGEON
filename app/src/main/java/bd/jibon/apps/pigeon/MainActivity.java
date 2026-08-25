@@ -73,7 +73,7 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
                         if (success) {
                             new AlertDialog.Builder(MainActivity.this)
                                     .setTitle("Group Network Created")
-                                    .setMessage("Group: " + groupName + "\\nGroup ID: " + groupId + "\\n\\nShare this ID with other tactical nodes to join.")
+                                    .setMessage("Group: " + groupName + "\nGroup ID: " + groupId + "\n\nShare this ID with other tactical nodes to join.")
                                     .setPositiveButton("OK", null)
                                     .show();
                         }
@@ -284,6 +284,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
             viewPager.setCurrentItem(1);
         } else if (id == R.id.nav_profile) {
             viewPager.setCurrentItem(2);
+        } else if (id == R.id.nav_blocked_users) {
+            startActivity(new Intent(this, BlockedUsersActivity.class));
         } else if (id == R.id.nav_about_app) {
             startActivity(new Intent(this, AboutAppActivity.class));
         } else if (id == R.id.nav_about_device) {

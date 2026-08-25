@@ -21,7 +21,6 @@ import android.os.Looper;
 import android.util.Base64;
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
-
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
@@ -85,6 +84,8 @@ public class PigeonService extends Service {
                 try {
                     JSONObject root = new JSONObject(text);
                     String event = root.optString("event", "");
+                    String myUsername = getSharedPreferences("PigeonPrefs", MODE_PRIVATE).getString("username", "");
+
                     if ("message".equals(event)) {
                         JSONObject data = root.getJSONObject("data");
                         String sender = data.getString("sender");
@@ -92,7 +93,6 @@ public class PigeonService extends Service {
                         String msgText = data.optString("text", "");
                         String timestamp = data.getString("timestamp");
                         String type = data.optString("type", "text");
-                        String myUsername = getSharedPreferences("PigeonPrefs", MODE_PRIVATE).getString("username", "");
 
                         if (myUsername.equals(receiver)) {
                             dbHelper.insertMessage(sender, sender, receiver, msgText, timestamp, false, type, true);
@@ -106,6 +106,33 @@ public class PigeonService extends Service {
 
                             updateNotification("New Secure Message", "Encrypted payload received from " + sender);
                         }
+                    } else if ("group_message".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        String sender = data.getString("sender");
+                        String groupId = data.getString("groupId");
+                        String msgText = data.optString("text", "");
+                        String timestamp = data.optString("timestamp", "Now");
+                        String type = data.optString("type", "text");
+
+                        if (!myUsername.equals(sender)) {
+                            dbHelper.insertMessage(groupId, sender, groupId, msgText, timestamp, false, type, true);
+                            updateNotification("New Group Message", "Message in group " + groupId);
+                        }
+                    } else if ("delete_message_both".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        String target = data.getString("target");
+                        String timestamp = data.getString("timestamp");
+                        String msgText = data.getString("text");
+                        dbHelper.deleteMessage(target, timestamp, msgText);
+                    } else if ("delete_group_message_both".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        String groupId = data.getString("groupId");
+                        String timestamp = data.getString("timestamp");
+                        String msgText = data.getString("text");
+                        dbHelper.deleteMessage(groupId, timestamp, msgText);
+                    } else if ("delete_chat".equals(event)) {
+                        String peer = root.getJSONObject("data").getString("peer");
+                        dbHelper.clearHistory(peer);
                     }
                 } catch (Exception ignored) {
                 }
@@ -222,23 +249,12 @@ public class PigeonService extends Service {
     }
 
     public void connectToNode(final String nodeName) {
+        if (isConnecting || isConnected) {
+            return;
+        }
         isConnecting = true;
-        isConnected = false;
         isManuallyClosed = false;
         connectedNodeName = nodeName;
-
-        if (webSocket != null) {
-            webSocket.cancel();
-            webSocket = null;
-        }
-
-        if (networkCallback != null) {
-            try {
-                connectivityManager.unregisterNetworkCallback(networkCallback);
-            } catch (Exception ignored) {
-            }
-        }
-
         updateNotification("Connecting", "Locating PIGEON Node " + nodeName);
         notifyStateChange(false, "Locating PIGEON Node " + nodeName + "...");
 
@@ -252,6 +268,13 @@ public class PigeonService extends Service {
                 .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 .setNetworkSpecifier(specifier)
                 .build();
+
+        if (networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (Exception ignored) {
+            }
+        }
 
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
@@ -318,7 +341,7 @@ public class PigeonService extends Service {
         updateNotification("Reconnecting", "Attempting automatic link recovery...");
         notifyStateChange(false, "Reconnecting...");
         handler.postDelayed(() -> {
-            if (!isConnected && !isManuallyClosed) {
+            if (isConnecting && !isConnected && !isManuallyClosed) {
                 establishWebSocketConnection();
             }
         }, 1000);

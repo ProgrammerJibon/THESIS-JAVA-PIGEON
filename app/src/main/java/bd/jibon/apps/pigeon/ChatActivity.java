@@ -17,6 +17,8 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.IBinder;
 import android.provider.MediaStore;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.Base64;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -35,10 +37,13 @@ import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+
+import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.List;
 
 public class ChatActivity extends AppCompatActivity {
@@ -46,18 +51,31 @@ public class ChatActivity extends AppCompatActivity {
     private String myUsername;
     private PigeonService pigeonService;
     private boolean isBound = false;
-    private final ActivityResultLauncher<String[]> locationPermissionLauncher = registerForActivityResult(
-            new ActivityResultContracts.RequestMultiplePermissions(),
+    private boolean isBlockedByMe = false;
+    private boolean isBlockedByPeer = false;
+
+    private RecyclerView rvMessages;
+    private MessageAdapter adapter;
+    private List<Message> messageList;
+    private EditText etInput;
+    private Button btnSend;
+    private ImageButton btnToggleActions;
+    private LinearLayout layoutAttachments;
+    private ImageButton btnAttachImage;
+    private ImageButton btnAttachLocation;
+    private PigeonDatabaseHelper dbHelper;
+    private final ActivityResultLauncher<Intent> imagePickerLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
             result -> {
-                Boolean fine = result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false);
-                Boolean coarse = result.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false);
-                if ((fine != null && fine) || (coarse != null && coarse)) {
-                    fetchAndSendLocation();
-                } else {
-                    Toast.makeText(this, "Location permission denied", Toast.LENGTH_SHORT).show();
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    Uri imageUri = result.getData().getData();
+                    processAndSendImage(imageUri);
                 }
             }
     );
+    private AlertDialog forwardDialog;
+    private ForwardTargetAdapter forwardAdapter;
+    private List<ForwardTarget> forwardTargets = new ArrayList<>();
     private final PigeonService.PigeonCallback callback = new PigeonService.PigeonCallback() {
         @Override
         public void onConnectionStateChanged(boolean connected, String message) {
@@ -120,6 +138,21 @@ public class ChatActivity extends AppCompatActivity {
                             refreshLocalMessages();
                             Toast.makeText(ChatActivity.this, "Peer deleted chat history.", Toast.LENGTH_SHORT).show();
                         }
+                    } else if ("connections_list".equals(event)) {
+                        JSONArray array = root.getJSONArray("data");
+                        for (int i = 0; i < array.length(); i++) {
+                            JSONObject obj = array.getJSONObject(i);
+                            String username = obj.getString("username");
+                            forwardTargets.add(new ForwardTarget(username, username, false));
+                        }
+                        if (forwardAdapter != null) forwardAdapter.updateData(forwardTargets);
+                    } else if ("groups_list".equals(event)) {
+                        JSONArray array = root.getJSONArray("data");
+                        for (int i = 0; i < array.length(); i++) {
+                            JSONObject obj = array.getJSONObject(i);
+                            forwardTargets.add(new ForwardTarget(obj.getString("name"), obj.getString("id"), true));
+                        }
+                        if (forwardAdapter != null) forwardAdapter.updateData(forwardTargets);
                     }
                 } catch (Exception ignored) {
                 }
@@ -127,28 +160,19 @@ public class ChatActivity extends AppCompatActivity {
         }
     };
 
-    private RecyclerView rvMessages;
-    private MessageAdapter adapter;
-    private List<Message> messageList;
-    private EditText etInput;
-    private Button btnSend;
-    private ImageButton btnToggleActions;
-    private LinearLayout layoutAttachments;
-    private ImageButton btnAttachImage;
-    private ImageButton btnAttachLocation;
-    private PigeonDatabaseHelper dbHelper;
-
-    private final ActivityResultLauncher<Intent> imagePickerLauncher = registerForActivityResult(
-            new ActivityResultContracts.StartActivityForResult(),
+    private final ActivityResultLauncher<String[]> locationPermissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestMultiplePermissions(),
             result -> {
-                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
-                    Uri imageUri = result.getData().getData();
-                    processAndSendImage(imageUri);
+                Boolean fine = result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false);
+                Boolean coarse = result.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false);
+                if ((fine != null && fine) || (coarse != null && coarse)) {
+                    fetchAndSendLocation();
+                } else {
+                    Toast.makeText(this, "Location permission denied", Toast.LENGTH_SHORT).show();
                 }
             }
     );
-    private boolean isBlockedByMe = false;
-    private boolean isBlockedByPeer = false;
+    private Message currentForwardingMessage;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -231,7 +255,7 @@ public class ChatActivity extends AppCompatActivity {
 
             @Override
             public void onForward(Message msg) {
-                Toast.makeText(ChatActivity.this, "Forward selected. (Routing disabled in demo)", Toast.LENGTH_SHORT).show();
+                showForwardDialog(msg);
             }
         });
 
@@ -367,6 +391,121 @@ public class ChatActivity extends AppCompatActivity {
             }
         } else {
             Toast.makeText(this, "Not connected to any node AP", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void forwardPayloadToUser(String targetUser, String text, String type) {
+        if (isBound && pigeonService != null && pigeonService.isConnected()) {
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("event", "message");
+                JSONObject data = new JSONObject();
+                data.put("sender", myUsername);
+                data.put("receiver", targetUser);
+                data.put("text", text);
+                data.put("timestamp", "Now");
+                data.put("type", type);
+                payload.put("data", data);
+                pigeonService.sendMessage(payload.toString());
+                dbHelper.insertMessage(targetUser, myUsername, targetUser, text, "Now", true, type, false);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void forwardPayloadToGroup(String targetGroupId, String text, String type) {
+        if (isBound && pigeonService != null && pigeonService.isConnected()) {
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("event", "group_message");
+                JSONObject data = new JSONObject();
+                data.put("groupId", targetGroupId);
+                data.put("text", text);
+                data.put("type", type);
+                data.put("sender", myUsername);
+                payload.put("data", data);
+                pigeonService.sendWssMessage(payload.toString());
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void showForwardDialog(Message msg) {
+        currentForwardingMessage = msg;
+        forwardTargets.clear();
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        View view = getLayoutInflater().inflate(R.layout.dialog_forward, null);
+        EditText etSearch = view.findViewById(R.id.etForwardSearch);
+        RecyclerView rvTargets = view.findViewById(R.id.rvForwardTargets);
+
+        forwardAdapter = new ForwardTargetAdapter(target -> {
+            executeForward(currentForwardingMessage, target);
+        });
+
+        rvTargets.setLayoutManager(new LinearLayoutManager(this));
+        rvTargets.setAdapter(forwardAdapter);
+
+        etSearch.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                forwardAdapter.filter(s.toString());
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
+
+        builder.setView(view);
+        forwardDialog = builder.create();
+        forwardDialog.show();
+
+        if (isBound && pigeonService != null && pigeonService.isConnected()) {
+            try {
+                JSONObject cPayload = new JSONObject();
+                cPayload.put("event", "get_connections");
+                cPayload.put("data", new JSONObject().put("username", myUsername));
+                pigeonService.sendMessage(cPayload.toString());
+
+                JSONObject gPayload = new JSONObject();
+                gPayload.put("event", "get_groups");
+                gPayload.put("data", new JSONObject().put("username", myUsername));
+                pigeonService.sendMessage(gPayload.toString());
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void executeForward(Message originalMsg, ForwardTarget target) {
+        String owner = (originalMsg.getSender() != null && !originalMsg.getSender().isEmpty()) ? originalMsg.getSender() : peerUsername;
+        String header = "[Forwarded from " + owner + "]";
+        String rawPayload = (originalMsg.getType() == Message.TYPE_IMAGE) ? originalMsg.getImageBase64() : originalMsg.getText();
+        String type = (originalMsg.getType() == Message.TYPE_IMAGE) ? "image" : (originalMsg.getType() == Message.TYPE_LOCATION) ? "location" : "text";
+
+        if (!type.equals("text")) {
+            if (target.isGroup()) {
+                forwardPayloadToGroup(target.getId(), header, "text");
+                forwardPayloadToGroup(target.getId(), rawPayload, type);
+            } else {
+                forwardPayloadToUser(target.getId(), header, "text");
+                forwardPayloadToUser(target.getId(), rawPayload, type);
+            }
+        } else {
+            if (target.isGroup()) {
+                forwardPayloadToGroup(target.getId(), header + "\n" + rawPayload, "text");
+            } else {
+                forwardPayloadToUser(target.getId(), header + "\n" + rawPayload, "text");
+            }
+        }
+
+        Toast.makeText(this, "Message forwarded successfully", Toast.LENGTH_SHORT).show();
+        if (forwardDialog != null && forwardDialog.isShowing()) {
+            forwardDialog.dismiss();
         }
     }
 

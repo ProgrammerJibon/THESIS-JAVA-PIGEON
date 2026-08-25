@@ -18,6 +18,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class GroupsFragment extends Fragment {
@@ -59,6 +60,13 @@ public class GroupsFragment extends Fragment {
 
                             groupList.add(new Group(name, id, lastMsg, time, activeCount));
                         }
+
+                        Collections.sort(groupList, (g1, g2) -> {
+                            int id1 = dbHelper.getLastMessageId(g1.getGroupId());
+                            int id2 = dbHelper.getLastMessageId(g2.getGroupId());
+                            return Integer.compare(id2, id1);
+                        });
+
                         adapter.notifyDataSetChanged();
                         checkEmptyState();
                         swipeRefresh.setRefreshing(false);

@@ -5,7 +5,6 @@ import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -103,6 +102,17 @@ public class PigeonDatabaseHelper extends SQLiteOpenHelper {
         String res = "";
         if (cursor.moveToFirst()) {
             res = cursor.getString(0);
+        }
+        cursor.close();
+        return res;
+    }
+
+    public int getLastMessageId(String sessionId) {
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor cursor = db.rawQuery("SELECT id FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 1", new String[]{sessionId});
+        int res = 0;
+        if (cursor.moveToFirst()) {
+            res = cursor.getInt(0);
         }
         cursor.close();
         return res;

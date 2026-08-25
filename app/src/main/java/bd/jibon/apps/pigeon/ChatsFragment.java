@@ -18,6 +18,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class ChatsFragment extends Fragment {
@@ -60,6 +61,13 @@ public class ChatsFragment extends Fragment {
 
                             chatList.add(new Chat(username, lastMsg, time, active, blockedByMe, blockedByPeer));
                         }
+
+                        Collections.sort(chatList, (c1, c2) -> {
+                            int id1 = dbHelper.getLastMessageId(c1.getUsername());
+                            int id2 = dbHelper.getLastMessageId(c2.getUsername());
+                            return Integer.compare(id2, id1);
+                        });
+                        
                         adapter.notifyDataSetChanged();
                         checkEmptyState();
                         swipeRefresh.setRefreshing(false);
