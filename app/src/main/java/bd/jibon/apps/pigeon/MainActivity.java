@@ -35,10 +35,27 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
     private TabLayout tabLayout;
     private PigeonService pigeonService;
     private boolean isBound = false;
+    private AlertDialog reconnectDialog;
 
     private final PigeonService.PigeonCallback callback = new PigeonService.PigeonCallback() {
         @Override
         public void onConnectionStateChanged(boolean connected, String message) {
+            runOnUiThread(() -> {
+                if (!connected && !isFinishing()) {
+                    if (reconnectDialog == null) {
+                        reconnectDialog = new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("Connection Lost")
+                                .setMessage("Disconnected from PIGEON Node. Reconnecting...")
+                                .setCancelable(false)
+                                .setPositiveButton("Exit", (dialog, which) -> finish())
+                                .create();
+                    }
+                    if (!reconnectDialog.isShowing()) reconnectDialog.show();
+                } else {
+                    if (reconnectDialog != null && reconnectDialog.isShowing())
+                        reconnectDialog.dismiss();
+                }
+            });
         }
 
         @Override

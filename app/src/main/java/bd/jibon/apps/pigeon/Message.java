@@ -13,6 +13,7 @@ public class Message {
     private String imageBase64;
     private double latitude;
     private double longitude;
+    private boolean isDelivered;
 
     public Message(String sender, String text, String timestamp, boolean isSent) {
         this.sender = sender;
@@ -74,5 +75,13 @@ public class Message {
 
     public double getLongitude() {
         return longitude;
+    }
+
+    public boolean isDelivered() {
+        return isDelivered;
+    }
+
+    public void setDelivered(boolean delivered) {
+        isDelivered = delivered;
     }
 }

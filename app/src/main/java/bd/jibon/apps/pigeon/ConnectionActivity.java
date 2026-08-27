@@ -44,7 +44,12 @@ public class ConnectionActivity extends AppCompatActivity implements PigeonServi
             pigeonService = binder.getService();
             isBound = true;
             pigeonService.registerCallback(ConnectionActivity.this);
-            autoConnectIfSaved();
+
+            // Populates field but waits for the user to press CONNECT
+            String savedDevice = prefs.getString("saved_device_name", "");
+            if (!savedDevice.isEmpty()) {
+                etDeviceId.setText(savedDevice);
+            }
         }
 
         @Override
@@ -178,15 +183,6 @@ public class ConnectionActivity extends AppCompatActivity implements PigeonServi
         if (isBound && pigeonService != null) {
             showLoadingDialog("Connecting to PIGEON Mesh...");
             pigeonService.connectToNode(deviceId);
-        }
-    }
-
-    private void autoConnectIfSaved() {
-        String savedDevice = prefs.getString("saved_device_name", "");
-        if (!savedDevice.isEmpty() && isBound && pigeonService != null) {
-            etDeviceId.setText(savedDevice);
-            showLoadingDialog("Auto-connecting to " + savedDevice + "...");
-            pigeonService.connectToNode(savedDevice);
         }
     }
 

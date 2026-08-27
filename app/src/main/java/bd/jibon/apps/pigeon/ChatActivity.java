@@ -15,6 +15,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
 import android.os.IBinder;
 import android.provider.MediaStore;
 import android.text.Editable;
@@ -27,7 +28,9 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.Toast;
+
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
@@ -40,6 +43,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -64,6 +68,36 @@ public class ChatActivity extends AppCompatActivity {
     private ImageButton btnAttachImage;
     private ImageButton btnAttachLocation;
     private PigeonDatabaseHelper dbHelper;
+    private AlertDialog reconnectDialog;
+
+    private AlertDialog transferDialog;
+    private ProgressBar transferProgress;
+    private List<String> appChunks;
+
+    private boolean isSendingImage = false;
+    private int currentAppChunk = -1;
+    private int expectedIncomingTotal = 0;
+    private String currentTransferType = "";
+    private Handler transferHandler = new Handler();
+    private StringBuilder incomingImageBuffer;
+    private int expectedIncomingChunk = 0;
+    private final Runnable transferTimeoutRunnable = new Runnable() {
+        public void run() {
+            if (transferDialog != null && transferDialog.isShowing()) {
+                if (isSendingImage) {
+                    if (currentAppChunk == -1) {
+                        sendAppChunkControl("img_start", appChunks.size(), currentTransferType, 0);
+                    } else if (currentAppChunk < appChunks.size()) {
+                        sendAppChunkData(appChunks.get(currentAppChunk), currentAppChunk, appChunks.size());
+                    }
+                } else {
+                    sendAppChunkControl("img_ack", expectedIncomingTotal, "", expectedIncomingChunk);
+                }
+                transferHandler.postDelayed(this, 5000);
+            }
+        }
+    };
+
     private final ActivityResultLauncher<Intent> imagePickerLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
             result -> {
@@ -73,12 +107,30 @@ public class ChatActivity extends AppCompatActivity {
                 }
             }
     );
+
     private AlertDialog forwardDialog;
     private ForwardTargetAdapter forwardAdapter;
     private List<ForwardTarget> forwardTargets = new ArrayList<>();
+    private String incomingImageType = "";
     private final PigeonService.PigeonCallback callback = new PigeonService.PigeonCallback() {
         @Override
         public void onConnectionStateChanged(boolean connected, String message) {
+            runOnUiThread(() -> {
+                if (!connected && !isFinishing()) {
+                    if (reconnectDialog == null) {
+                        reconnectDialog = new AlertDialog.Builder(ChatActivity.this)
+                                .setTitle("Connection Lost")
+                                .setMessage("Disconnected from PIGEON Node. Reconnecting...")
+                                .setCancelable(false)
+                                .setPositiveButton("Exit", (dialog, which) -> finish())
+                                .create();
+                    }
+                    if (!reconnectDialog.isShowing()) reconnectDialog.show();
+                } else {
+                    if (reconnectDialog != null && reconnectDialog.isShowing())
+                        reconnectDialog.dismiss();
+                }
+            });
         }
 
         @Override
@@ -87,15 +139,20 @@ public class ChatActivity extends AppCompatActivity {
                 try {
                     JSONObject root = new JSONObject(payload);
                     String event = root.optString("event", "");
+
                     if ("message".equals(event)) {
                         JSONObject data = root.getJSONObject("data");
                         String sender = data.getString("sender");
-                        String receiver = data.getString("receiver");
-                        String text = data.optString("text", "");
-                        String timestamp = data.getString("timestamp");
                         String type = data.optString("type", "text");
 
+                        if (type.startsWith("img_")) {
+                            if (peerUsername.equals(sender)) handleImageChunkProtocol(data);
+                            return;
+                        }
+
                         if (peerUsername.equals(sender)) {
+                            String text = data.optString("text", "");
+                            String timestamp = data.getString("timestamp");
                             Message m;
                             if ("image".equals(type)) {
                                 m = new Message(sender, text, timestamp, false, Message.TYPE_IMAGE);
@@ -108,41 +165,26 @@ public class ChatActivity extends AppCompatActivity {
                             adapter.notifyItemInserted(messageList.size() - 1);
                             rvMessages.scrollToPosition(messageList.size() - 1);
                         }
-                    } else if ("send_error".equals(event)) {
-                        JSONObject data = root.getJSONObject("data");
-                        String errorMsg = data.getString("message");
-                        new AlertDialog.Builder(ChatActivity.this)
-                                .setTitle("Transmission Blocked")
-                                .setMessage(errorMsg)
-                                .setPositiveButton("OK", null)
-                                .show();
                     } else if ("msg_delivered".equals(event)) {
                         JSONObject data = root.getJSONObject("data");
-                        String receiver = data.getString("receiver");
-                        if (peerUsername.equals(receiver)) {
-                            Toast.makeText(ChatActivity.this, "Message delivered to " + receiver, Toast.LENGTH_SHORT).show();
-                        }
-                    } else if ("delete_message_both".equals(event)) {
-                        JSONObject data = root.getJSONObject("data");
-                        String sender = data.getString("sender");
-                        if (peerUsername.equals(sender)) {
-                            String timestamp = data.getString("timestamp");
-                            String text = data.getString("text");
-                            dbHelper.deleteMessage(peerUsername, timestamp, text);
+                        if (peerUsername.equals(data.getString("receiver"))) {
+                            dbHelper.markAllMessagesDelivered(peerUsername);
                             refreshLocalMessages();
-                        }
-                    } else if ("delete_chat".equals(event)) {
-                        String peer = root.getJSONObject("data").getString("peer");
-                        if (peerUsername.equals(peer)) {
-                            dbHelper.clearHistory(peerUsername);
-                            refreshLocalMessages();
-                            Toast.makeText(ChatActivity.this, "Peer deleted chat history.", Toast.LENGTH_SHORT).show();
                         }
                     } else if ("connections_list".equals(event)) {
                         JSONArray array = root.getJSONArray("data");
                         for (int i = 0; i < array.length(); i++) {
                             JSONObject obj = array.getJSONObject(i);
                             String username = obj.getString("username");
+                            if (peerUsername.equals(username)) {
+                                boolean active = obj.optBoolean("active", false);
+                                if (!isBlockedByMe && !isBlockedByPeer) {
+                                    btnSend.setVisibility(active ? View.VISIBLE : View.GONE);
+                                    btnToggleActions.setVisibility(active ? View.VISIBLE : View.GONE);
+                                    etInput.setEnabled(active);
+                                    etInput.setHint(active ? getString(R.string.hint_message) : "User is currently offline");
+                                }
+                            }
                             forwardTargets.add(new ForwardTarget(username, username, false));
                         }
                         if (forwardAdapter != null) forwardAdapter.updateData(forwardTargets);
@@ -153,6 +195,18 @@ public class ChatActivity extends AppCompatActivity {
                             forwardTargets.add(new ForwardTarget(obj.getString("name"), obj.getString("id"), true));
                         }
                         if (forwardAdapter != null) forwardAdapter.updateData(forwardTargets);
+                    } else if ("delete_message_both".equals(event)) {
+                        JSONObject data = root.getJSONObject("data");
+                        if (peerUsername.equals(data.getString("sender"))) {
+                            dbHelper.deleteMessage(peerUsername, data.getString("timestamp"), data.getString("text"));
+                            refreshLocalMessages();
+                        }
+                    } else if ("delete_chat".equals(event)) {
+                        if (peerUsername.equals(root.getJSONObject("data").getString("peer"))) {
+                            dbHelper.clearHistory(peerUsername);
+                            refreshLocalMessages();
+                            Toast.makeText(ChatActivity.this, "Peer deleted chat history.", Toast.LENGTH_SHORT).show();
+                        }
                     }
                 } catch (Exception ignored) {
                 }
@@ -172,7 +226,6 @@ public class ChatActivity extends AppCompatActivity {
                 }
             }
     );
-    private Message currentForwardingMessage;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -181,6 +234,7 @@ public class ChatActivity extends AppCompatActivity {
             pigeonService = binder.getService();
             isBound = true;
             pigeonService.registerCallback(callback);
+            requestConnectionsList();
         }
 
         @Override
@@ -188,6 +242,7 @@ public class ChatActivity extends AppCompatActivity {
             isBound = false;
         }
     };
+    private Message currentForwardingMessage;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -207,7 +262,6 @@ public class ChatActivity extends AppCompatActivity {
             getSupportActionBar().setTitle(peerUsername);
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         }
-
         toolbar.setNavigationOnClickListener(v -> onBackPressed());
 
         rvMessages = findViewById(R.id.rvChatMessages);
@@ -220,7 +274,7 @@ public class ChatActivity extends AppCompatActivity {
 
         dbHelper = new PigeonDatabaseHelper(this);
         messageList = dbHelper.getMessages(peerUsername);
-        
+
         adapter = new MessageAdapter(messageList, false);
         adapter.setListener(new MessageAdapter.MessageInteractionListener() {
             @Override
@@ -293,10 +347,7 @@ public class ChatActivity extends AppCompatActivity {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 fetchAndSendLocation();
             } else {
-                locationPermissionLauncher.launch(new String[]{
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                });
+                locationPermissionLauncher.launch(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION});
             }
             layoutAttachments.setVisibility(View.GONE);
             btnToggleActions.setImageResource(R.drawable.ic_add);
@@ -304,9 +355,9 @@ public class ChatActivity extends AppCompatActivity {
 
         if (isBlockedByMe || isBlockedByPeer) {
             etInput.setEnabled(false);
-            btnSend.setEnabled(false);
-            btnToggleActions.setEnabled(false);
-            etInput.setHint("Messaging blocked");
+            btnSend.setVisibility(View.GONE);
+            btnToggleActions.setVisibility(View.GONE);
+            etInput.setHint("Messaging blocked by network policy");
         }
 
         Intent intent = new Intent(this, PigeonService.class);
@@ -319,17 +370,29 @@ public class ChatActivity extends AppCompatActivity {
         adapter.notifyDataSetChanged();
     }
 
+    private void requestConnectionsList() {
+        if (isBound && pigeonService != null && pigeonService.isConnected()) {
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("event", "get_connections");
+                JSONObject data = new JSONObject();
+                data.put("username", myUsername);
+                payload.put("data", data);
+                pigeonService.sendMessage(payload.toString());
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     private void fetchAndSendLocation() {
         try {
             LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
             if (locationManager != null) {
                 Location location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                if (location == null) {
+                if (location == null)
                     location = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                }
                 if (location != null) {
-                    String locStr = "GPS: " + location.getLatitude() + "," + location.getLongitude();
-                    transmitPayload(locStr, "location");
+                    transmitPayload("GPS: " + location.getLatitude() + "," + location.getLongitude(), "location");
                 } else {
                     Toast.makeText(this, "Unable to get location. Try opening Maps first.", Toast.LENGTH_SHORT).show();
                 }
@@ -344,18 +407,17 @@ public class ChatActivity extends AppCompatActivity {
             Bitmap originalBitmap = BitmapFactory.decodeStream(inputStream);
             int width = originalBitmap.getWidth();
             int height = originalBitmap.getHeight();
-
-            if (width > 150 || height > 150) {
-                float ratio = Math.min((float) 150 / width, (float) 150 / height);
+            if (width > 200 || height > 200) {
+                float ratio = Math.min((float) 200 / width, (float) 200 / height);
                 width = Math.round(width * ratio);
                 height = Math.round(height * ratio);
             }
             Bitmap resizedBitmap = Bitmap.createScaledBitmap(originalBitmap, width, height, true);
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             resizedBitmap.compress(Bitmap.CompressFormat.JPEG, 30, outputStream);
-            byte[] byteArray = outputStream.toByteArray();
-            String base64Image = Base64.encodeToString(byteArray, Base64.NO_WRAP);
-            transmitPayload(base64Image, "image");
+            String base64Image = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP);
+
+            startAppLevelChunking(base64Image, "image");
         } catch (Exception ignored) {
         }
     }
@@ -372,18 +434,12 @@ public class ChatActivity extends AppCompatActivity {
                 data.put("timestamp", "Now");
                 data.put("type", type);
                 payload.put("data", data);
-
                 pigeonService.sendMessage(payload.toString());
 
                 dbHelper.insertMessage(peerUsername, myUsername, peerUsername, text, "Now", true, type, false);
-                Message m;
-                if ("image".equals(type)) {
-                    m = new Message(myUsername, text, "Now", true, Message.TYPE_IMAGE);
-                } else if ("location".equals(type)) {
-                    m = new Message(myUsername, text, "Now", true, Message.TYPE_LOCATION);
-                } else {
-                    m = new Message(myUsername, text, "Now", true);
-                }
+                Message m = ("image".equals(type)) ? new Message(myUsername, text, "Now", true, Message.TYPE_IMAGE) :
+                        ("location".equals(type)) ? new Message(myUsername, text, "Now", true, Message.TYPE_LOCATION) :
+                        new Message(myUsername, text, "Now", true);
                 messageList.add(m);
                 adapter.notifyItemInserted(messageList.size() - 1);
                 rvMessages.scrollToPosition(messageList.size() - 1);
@@ -391,6 +447,165 @@ public class ChatActivity extends AppCompatActivity {
             }
         } else {
             Toast.makeText(this, "Not connected to any node AP", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void startAppLevelChunking(String fullBase64Data, String type) {
+        int chunkSize = 60;
+        appChunks = new ArrayList<>();
+        for (int i = 0; i < fullBase64Data.length(); i += chunkSize) {
+            appChunks.add(fullBase64Data.substring(i, Math.min(i + chunkSize, fullBase64Data.length())));
+        }
+        currentAppChunk = -1;
+        currentTransferType = type;
+        isSendingImage = true;
+
+        showTransferDialog("Waiting for peer...", true);
+        sendAppChunkControl("img_start", appChunks.size(), type, 0);
+        transferHandler.postDelayed(transferTimeoutRunnable, 5000);
+    }
+
+    private void handleImageChunkProtocol(JSONObject data) {
+        String type = data.optString("type");
+
+        if ("img_start".equals(type)) {
+            isSendingImage = false;
+            incomingImageBuffer = new StringBuilder();
+            expectedIncomingChunk = 0;
+            incomingImageType = data.optString("text", "image");
+            expectedIncomingTotal = data.optInt("total", 1);
+
+            showTransferDialog("Receiving Image...", false);
+            sendAppChunkControl("img_ack", expectedIncomingTotal, "", 0);
+
+            transferHandler.removeCallbacks(transferTimeoutRunnable);
+            transferHandler.postDelayed(transferTimeoutRunnable, 5000);
+
+        } else if ("img_ack".equals(type)) {
+            if (!isSendingImage) return;
+            transferHandler.removeCallbacks(transferTimeoutRunnable);
+            int reqChunk = data.optInt("chunk", 0);
+
+            if (reqChunk < appChunks.size()) {
+                if (transferDialog != null && transferDialog.isShowing())
+                    transferDialog.setTitle("Sending Image...");
+                currentAppChunk = reqChunk;
+                sendAppChunkData(appChunks.get(reqChunk), reqChunk, appChunks.size());
+                if (transferProgress != null)
+                    transferProgress.setProgress((int) ((reqChunk * 100.0f) / appChunks.size()));
+                transferHandler.postDelayed(transferTimeoutRunnable, 5000);
+
+            } else if (reqChunk == appChunks.size()) {
+                dismissTransferDialog();
+                String fullData = String.join("", appChunks);
+                dbHelper.insertMessage(peerUsername, myUsername, peerUsername, fullData, "Now", true, currentTransferType, true);
+                Message m = new Message(myUsername, fullData, "Now", true, Message.TYPE_IMAGE);
+                m.setDelivered(true);
+                messageList.add(m);
+                adapter.notifyItemInserted(messageList.size() - 1);
+                rvMessages.scrollToPosition(messageList.size() - 1);
+            }
+
+        } else if ("img_chunk".equals(type)) {
+            if (isSendingImage) return;
+            transferHandler.removeCallbacks(transferTimeoutRunnable);
+            int c = data.optInt("chunk", 0);
+            int t = data.optInt("total", 1);
+
+            if (c == expectedIncomingChunk) {
+                incomingImageBuffer.append(data.optString("text", ""));
+                expectedIncomingChunk++;
+                if (transferProgress != null)
+                    transferProgress.setProgress((int) ((expectedIncomingChunk * 100.0f) / t));
+
+                sendAppChunkControl("img_ack", t, "", expectedIncomingChunk);
+
+                if (expectedIncomingChunk == t) {
+                    dismissTransferDialog();
+                    Message m = new Message(data.optString("sender"), incomingImageBuffer.toString(), data.optString("timestamp", "Now"), false, Message.TYPE_IMAGE);
+                    dbHelper.insertMessage(peerUsername, m.getSender(), peerUsername, m.getText(), m.getTimestamp(), false, incomingImageType, true);
+                    messageList.add(m);
+                    adapter.notifyItemInserted(messageList.size() - 1);
+                    rvMessages.scrollToPosition(messageList.size() - 1);
+                } else {
+                    transferHandler.postDelayed(transferTimeoutRunnable, 5000);
+                }
+            } else {
+                sendAppChunkControl("img_ack", t, "", expectedIncomingChunk);
+                transferHandler.postDelayed(transferTimeoutRunnable, 5000);
+            }
+
+        } else if ("img_cancel".equals(type)) {
+            dismissTransferDialog();
+            Toast.makeText(this, "Transfer cancelled by peer", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void showTransferDialog(String title, boolean isSender) {
+        runOnUiThread(() -> {
+            LinearLayout layout = new LinearLayout(this);
+            layout.setOrientation(LinearLayout.VERTICAL);
+            layout.setPadding(60, 40, 60, 40);
+
+            transferProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+            transferProgress.setMax(100);
+            layout.addView(transferProgress);
+
+            AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setView(layout)
+                    .setCancelable(false)
+                    .setNegativeButton("Cancel", (dialog, which) -> {
+                        sendAppChunkControl("img_cancel", 0, "", 0);
+                        dismissTransferDialog();
+                    });
+            transferDialog = builder.create();
+            transferDialog.show();
+        });
+    }
+
+    private void dismissTransferDialog() {
+        runOnUiThread(() -> {
+            if (transferDialog != null && transferDialog.isShowing()) transferDialog.dismiss();
+            transferHandler.removeCallbacks(transferTimeoutRunnable);
+        });
+    }
+
+    private void sendAppChunkControl(String type, int total, String transferType, int reqChunk) {
+        if (!isBound || pigeonService == null) return;
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("event", "message");
+            JSONObject data = new JSONObject();
+            data.put("sender", myUsername);
+            data.put("receiver", peerUsername);
+            data.put("type", type);
+            data.put("total", total);
+            data.put("chunk", reqChunk);
+            data.put("text", transferType);
+            data.put("timestamp", "Now");
+            payload.put("data", data);
+            pigeonService.sendMessage(payload.toString());
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void sendAppChunkData(String chunkData, int chunk, int total) {
+        if (!isBound || pigeonService == null) return;
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("event", "message");
+            JSONObject data = new JSONObject();
+            data.put("sender", myUsername);
+            data.put("receiver", peerUsername);
+            data.put("type", "img_chunk");
+            data.put("chunk", chunk);
+            data.put("total", total);
+            data.put("text", chunkData);
+            data.put("timestamp", "Now");
+            payload.put("data", data);
+            pigeonService.sendMessage(payload.toString());
+        } catch (Exception ignored) {
         }
     }
 
@@ -440,23 +655,31 @@ public class ChatActivity extends AppCompatActivity {
         RecyclerView rvTargets = view.findViewById(R.id.rvForwardTargets);
 
         forwardAdapter = new ForwardTargetAdapter(target -> {
-            executeForward(currentForwardingMessage, target);
+            String owner = (currentForwardingMessage.getSender() != null && !currentForwardingMessage.getSender().isEmpty()) ? currentForwardingMessage.getSender() : peerUsername;
+            String header = "[Forwarded from " + owner + "]\n";
+            String rawPayload = (currentForwardingMessage.getType() == Message.TYPE_IMAGE) ? currentForwardingMessage.getImageBase64() : currentForwardingMessage.getText();
+            String type = (currentForwardingMessage.getType() == Message.TYPE_IMAGE) ? "image" : (currentForwardingMessage.getType() == Message.TYPE_LOCATION) ? "location" : "text";
+
+            if (target.isGroup()) {
+                forwardPayloadToGroup(target.getId(), header + rawPayload, type);
+            } else {
+                forwardPayloadToUser(target.getId(), header + rawPayload, type);
+            }
+            Toast.makeText(this, "Message forwarded successfully", Toast.LENGTH_SHORT).show();
+            if (forwardDialog != null) forwardDialog.dismiss();
         });
 
         rvTargets.setLayoutManager(new LinearLayoutManager(this));
         rvTargets.setAdapter(forwardAdapter);
 
         etSearch.addTextChangedListener(new TextWatcher() {
-            @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
             }
 
-            @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 forwardAdapter.filter(s.toString());
             }
 
-            @Override
             public void afterTextChanged(Editable s) {
             }
         });
@@ -464,49 +687,7 @@ public class ChatActivity extends AppCompatActivity {
         builder.setView(view);
         forwardDialog = builder.create();
         forwardDialog.show();
-
-        if (isBound && pigeonService != null && pigeonService.isConnected()) {
-            try {
-                JSONObject cPayload = new JSONObject();
-                cPayload.put("event", "get_connections");
-                cPayload.put("data", new JSONObject().put("username", myUsername));
-                pigeonService.sendMessage(cPayload.toString());
-
-                JSONObject gPayload = new JSONObject();
-                gPayload.put("event", "get_groups");
-                gPayload.put("data", new JSONObject().put("username", myUsername));
-                pigeonService.sendMessage(gPayload.toString());
-            } catch (Exception ignored) {
-            }
-        }
-    }
-
-    private void executeForward(Message originalMsg, ForwardTarget target) {
-        String owner = (originalMsg.getSender() != null && !originalMsg.getSender().isEmpty()) ? originalMsg.getSender() : peerUsername;
-        String header = "[Forwarded from " + owner + "]";
-        String rawPayload = (originalMsg.getType() == Message.TYPE_IMAGE) ? originalMsg.getImageBase64() : originalMsg.getText();
-        String type = (originalMsg.getType() == Message.TYPE_IMAGE) ? "image" : (originalMsg.getType() == Message.TYPE_LOCATION) ? "location" : "text";
-
-        if (!type.equals("text")) {
-            if (target.isGroup()) {
-                forwardPayloadToGroup(target.getId(), header, "text");
-                forwardPayloadToGroup(target.getId(), rawPayload, type);
-            } else {
-                forwardPayloadToUser(target.getId(), header, "text");
-                forwardPayloadToUser(target.getId(), rawPayload, type);
-            }
-        } else {
-            if (target.isGroup()) {
-                forwardPayloadToGroup(target.getId(), header + "\n" + rawPayload, "text");
-            } else {
-                forwardPayloadToUser(target.getId(), header + "\n" + rawPayload, "text");
-            }
-        }
-
-        Toast.makeText(this, "Message forwarded successfully", Toast.LENGTH_SHORT).show();
-        if (forwardDialog != null && forwardDialog.isShowing()) {
-            forwardDialog.dismiss();
-        }
+        requestConnectionsList();
     }
 
     @Override
@@ -518,59 +699,54 @@ public class ChatActivity extends AppCompatActivity {
     @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         if (item.getItemId() == R.id.action_info) {
-            showInfoDialog();
+            String blockOption = isBlockedByMe ? "Unblock User" : "Block User";
+            String[] options = {"Delete local history", "Delete chat for both", "Download history as HTML", blockOption};
+            new AlertDialog.Builder(this)
+                    .setTitle(peerUsername)
+                    .setItems(options, (dialog, which) -> {
+                        if (which == 0) {
+                            dbHelper.clearHistory(peerUsername);
+                            refreshLocalMessages();
+                            Toast.makeText(this, "Local chat history cleared.", Toast.LENGTH_SHORT).show();
+                        } else if (which == 1) {
+                            dbHelper.clearHistory(peerUsername);
+                            refreshLocalMessages();
+                            if (isBound && pigeonService != null) {
+                                try {
+                                    JSONObject payload = new JSONObject();
+                                    payload.put("event", "delete_chat_both");
+                                    JSONObject data = new JSONObject();
+                                    data.put("target", peerUsername);
+                                    data.put("sender", myUsername);
+                                    payload.put("data", data);
+                                    pigeonService.sendMessage(payload.toString());
+                                } catch (Exception ignored) {
+                                }
+                            }
+                            Toast.makeText(this, "Requested remote node to delete secure history.", Toast.LENGTH_SHORT).show();
+                        } else if (which == 2) {
+                            downloadHtmlHistory();
+                        } else if (which == 3) {
+                            if (isBound && pigeonService != null) {
+                                try {
+                                    JSONObject payload = new JSONObject();
+                                    payload.put("event", isBlockedByMe ? "unblock_user" : "block_user");
+                                    JSONObject data = new JSONObject();
+                                    data.put("target", peerUsername);
+                                    data.put("sender", myUsername);
+                                    payload.put("data", data);
+                                    pigeonService.sendMessage(payload.toString());
+                                    isBlockedByMe = !isBlockedByMe;
+                                    Toast.makeText(this, isBlockedByMe ? "User blocked." : "User unblocked.", Toast.LENGTH_SHORT).show();
+                                    finish();
+                                } catch (Exception ignored) {
+                                }
+                            }
+                        }
+                    }).show();
             return true;
         }
         return super.onOptionsItemSelected(item);
-    }
-
-    private void showInfoDialog() {
-        String blockOption = isBlockedByMe ? "Unblock User" : "Block User";
-        String[] options = {"Delete local history", "Delete chat for both", "Download history as HTML", blockOption};
-        new AlertDialog.Builder(this)
-                .setTitle(peerUsername)
-                .setItems(options, (dialog, which) -> {
-                    if (which == 0) {
-                        dbHelper.clearHistory(peerUsername);
-                        refreshLocalMessages();
-                        Toast.makeText(this, "Local chat history cleared.", Toast.LENGTH_SHORT).show();
-                    } else if (which == 1) {
-                        dbHelper.clearHistory(peerUsername);
-                        refreshLocalMessages();
-                        if (isBound && pigeonService != null) {
-                            try {
-                                JSONObject payload = new JSONObject();
-                                payload.put("event", "delete_chat_both");
-                                JSONObject data = new JSONObject();
-                                data.put("target", peerUsername);
-                                data.put("sender", myUsername);
-                                payload.put("data", data);
-                                pigeonService.sendMessage(payload.toString());
-                            } catch (Exception ignored) {
-                            }
-                        }
-                        Toast.makeText(this, "Requested remote node to delete secure history.", Toast.LENGTH_SHORT).show();
-                    } else if (which == 2) {
-                        downloadHtmlHistory();
-                    } else if (which == 3) {
-                        if (isBound && pigeonService != null) {
-                            try {
-                                JSONObject payload = new JSONObject();
-                                payload.put("event", isBlockedByMe ? "unblock_user" : "block_user");
-                                JSONObject data = new JSONObject();
-                                data.put("target", peerUsername);
-                                data.put("sender", myUsername);
-                                payload.put("data", data);
-                                pigeonService.sendMessage(payload.toString());
-                                isBlockedByMe = !isBlockedByMe;
-                                Toast.makeText(this, isBlockedByMe ? "User blocked." : "User unblocked.", Toast.LENGTH_SHORT).show();
-                                finish();
-                            } catch (Exception ignored) {
-                            }
-                        }
-                    }
-                })
-                .show();
     }
 
     private void downloadHtmlHistory() {
@@ -611,10 +787,9 @@ public class ChatActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        dismissTransferDialog();
         if (isBound) {
-            if (pigeonService != null) {
-                pigeonService.unregisterCallback(callback);
-            }
+            if (pigeonService != null) pigeonService.unregisterCallback(callback);
             unbindService(connection);
             isBound = false;
         }

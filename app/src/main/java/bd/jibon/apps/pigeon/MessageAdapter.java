@@ -158,9 +158,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
 
     public interface MessageInteractionListener {
         void onDeleteForMe(Message msg, int position);
-
         void onDeleteForBoth(Message msg, int position);
-
         void onForward(Message msg);
     }
 
@@ -187,7 +185,9 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         }
 
         void bind(Message msg, MessageInteractionListener listener, int position) {
-            tvMeta.setText(msg.getTimestamp() + " • Sent");
+            // SHOW DELIVERED OR SENT
+            tvMeta.setText(msg.getTimestamp() + (msg.isDelivered() ? " • Delivered" : " • Sent"));
+            
             ivImage.setVisibility(View.GONE);
             tvText.setVisibility(View.GONE);
             layoutLocation.setVisibility(View.GONE);

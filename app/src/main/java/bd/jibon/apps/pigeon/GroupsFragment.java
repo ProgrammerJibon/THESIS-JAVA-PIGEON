@@ -70,6 +70,8 @@ public class GroupsFragment extends Fragment {
                         adapter.notifyDataSetChanged();
                         checkEmptyState();
                         swipeRefresh.setRefreshing(false);
+                    } else if ("group_message".equals(event)) {
+                        refreshList();
                     }
                 } catch (Exception ignored) {
                 }

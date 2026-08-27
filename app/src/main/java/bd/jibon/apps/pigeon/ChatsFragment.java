@@ -75,6 +75,8 @@ public class ChatsFragment extends Fragment {
                         String peer = root.getJSONObject("data").getString("peer");
                         dbHelper.clearHistory(peer);
                         refreshList();
+                    } else if ("message".equals(event) || "msg_delivered".equals(event)) {
+                        refreshList();
                     }
                 } catch (Exception ignored) {
                 }

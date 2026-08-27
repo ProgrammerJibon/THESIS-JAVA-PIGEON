@@ -62,6 +62,7 @@ public class PigeonDatabaseHelper extends SQLiteOpenHelper {
                 String timestamp = cursor.getString(cursor.getColumnIndexOrThrow("timestamp"));
                 boolean isSelf = cursor.getInt(cursor.getColumnIndexOrThrow("is_self")) == 1;
                 String type = cursor.getString(cursor.getColumnIndexOrThrow("type"));
+                boolean isDelivered = cursor.getInt(cursor.getColumnIndexOrThrow("is_delivered")) == 1;
 
                 Message m;
                 if ("image".equals(type)) {
@@ -71,11 +72,19 @@ public class PigeonDatabaseHelper extends SQLiteOpenHelper {
                 } else {
                     m = new Message(sender, text, timestamp, isSelf);
                 }
+                m.setDelivered(isDelivered);
                 list.add(m);
             } while (cursor.moveToNext());
         }
         cursor.close();
         return list;
+    }
+
+    public void markAllMessagesDelivered(String sessionId) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues values = new ContentValues();
+        values.put("is_delivered", 1);
+        db.update("messages", values, "session_id = ? AND is_self = 1", new String[]{sessionId});
     }
 
     public String getLastMessageText(String sessionId) {
