@@ -3,31 +3,45 @@ plugins {
 }
 
 android {
-    namespace 'bd.jibon.apps.pigeon'
+    signingConfigs {
+        release {
+            storeFile file('E:\\AndroidProject\\pigeon\\keys\\key0')
+            storePassword '123456'
+            keyAlias 'key0'
+            keyPassword '123456'
+        }
+    }
+    namespace = 'bd.jibon.apps.pigeon'
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId "bd.jibon.apps.pigeon"
-        minSdk 26
-        targetSdk 36
-        versionCode 1
-        versionName "1.0"
-
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        applicationId = "bd.jibon.apps.pigeon"
+        minSdk = 26
+        targetSdk 37
+        versionCode = 20
+        versionName = '2.0'
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionNameSuffix 'v'
+        signingConfig signingConfigs.release
     }
 
     buildTypes {
         release {
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    buildFeatures {
+        viewBinding true
     }
 }
 
@@ -36,5 +50,5 @@ dependencies {
     implementation libs.material
     implementation libs.activity
     implementation libs.okhttp
-    implementation(libs.swiperefreshlayout)
+    implementation libs.swiperefreshlayout
 }
