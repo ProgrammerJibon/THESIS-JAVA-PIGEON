@@ -20,7 +20,8 @@
             android:layout_height="100dp"
             android:layout_marginTop="32dp"
             android:contentDescription="@string/logo_desc"
-            android:src="@drawable/ic_pigeon_logo" />
+            android:src="@drawable/logo"
+            app:tint="@color/colorPrimaryDark" />
 
         <TextView
             android:id="@+id/tvAppTitle"

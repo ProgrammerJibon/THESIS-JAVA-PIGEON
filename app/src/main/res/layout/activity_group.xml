@@ -60,7 +60,7 @@
                     android:layout_height="48dp"
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:contentDescription="@string/btn_attach"
-                    android:src="@android:drawable/ic_menu_camera"
+                    android:src="@drawable/baseline_image_24"
                     app:tint="@color/colorAccent" />
 
                 <ImageButton
@@ -69,7 +69,7 @@
                     android:layout_height="48dp"
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:contentDescription="@string/btn_location"
-                    android:src="@android:drawable/ic_menu_mylocation"
+                    android:src="@drawable/baseline_location_on_24"
                     app:tint="@color/colorAccent" />
 
             </LinearLayout>

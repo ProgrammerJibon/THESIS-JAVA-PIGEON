@@ -50,4 +50,6 @@
     <string name="terms_content">By accessing the decentralized PIGEON network, you agree to participate in an offline peer-to-peer framework. All data is transmitted securely via local RF links. The system hosts no centralized tracking, and encryption keys remain exclusively under user custody.</string>
     <string name="contact_info">For administrative support, custom node firmware inquiries, or emergency response deployment guides, contact the Project PIGEON research desk.</string>
     <string name="check_updates_status">Checking for localized application packages on nearest mesh gateway...</string>
+    <string name="search_users_or_groups">Search users or groups...</string>
+    <string name="forward_message">Forward Message</string>
 </resources>
