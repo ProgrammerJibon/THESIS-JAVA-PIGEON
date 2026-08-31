@@ -137,9 +137,7 @@ public class PigeonService extends Service {
                 } catch (Exception ignored) {
                 }
 
-                handler.post(() -> {
-                    notifyMessageReceived(text);
-                });
+                handler.post(() -> notifyMessageReceived(text));
             }
 
             @Override
@@ -258,6 +256,16 @@ public class PigeonService extends Service {
         updateNotification("Connecting", "Locating PIGEON Node " + nodeName);
         notifyStateChange(false, "Locating PIGEON Node " + nodeName + "...");
 
+        // Routing logic strictly based on OS Version to prevent crash
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            connectWifiApi29AndUp(nodeName);
+        } else {
+            connectWifiLegacy(nodeName);
+        }
+    }
+
+    // Isolated Android 10+ Specifier Method
+    private void connectWifiApi29AndUp(String nodeName) {
         WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder()
                 .setSsid(nodeName)
                 .setWpa2Passphrase(generatePassword(nodeName))
@@ -269,6 +277,36 @@ public class PigeonService extends Service {
                 .setNetworkSpecifier(specifier)
                 .build();
 
+        registerNetworkCallback(request);
+    }
+
+    // Isolated Android 9 and below WifiManager Method
+    private void connectWifiLegacy(String nodeName) {
+        android.net.wifi.WifiManager wifiManager = (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wifiManager != null) {
+            if (!wifiManager.isWifiEnabled()) {
+                wifiManager.setWifiEnabled(true);
+            }
+            android.net.wifi.WifiConfiguration wifiConfig = new android.net.wifi.WifiConfiguration();
+            wifiConfig.SSID = String.format("\"%s\"", nodeName);
+            wifiConfig.preSharedKey = String.format("\"%s\"", generatePassword(nodeName));
+
+            int netId = wifiManager.addNetwork(wifiConfig);
+            wifiManager.disconnect();
+            wifiManager.enableNetwork(netId, true);
+            wifiManager.reconnect();
+
+            NetworkRequest request = new NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .build();
+
+            registerNetworkCallback(request);
+        } else {
+            handleConnectionFailure("WiFi Manager unavailable");
+        }
+    }
+
+    private void registerNetworkCallback(NetworkRequest request) {
         if (networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
@@ -280,7 +318,11 @@ public class PigeonService extends Service {
             @Override
             public void onAvailable(@NonNull Network network) {
                 super.onAvailable(network);
-                connectivityManager.bindProcessToNetwork(network);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    connectivityManager.bindProcessToNetwork(network);
+                } else {
+                    ConnectivityManager.setProcessDefaultNetwork(network);
+                }
                 gatewayIp = extractGatewayIp(network);
                 handler.post(() -> notifyStateChange(false, "WiFi bound. Verifying route..."));
                 handler.postDelayed(() -> {
@@ -311,6 +353,30 @@ public class PigeonService extends Service {
         connectivityManager.requestNetwork(request, networkCallback);
     }
 
+    public void disconnect() {
+        isManuallyClosed = true;
+        isConnecting = false;
+        isConnected = false;
+        if (webSocket != null) {
+            webSocket.close(1000, "User logout/shutdown");
+            webSocket = null;
+        }
+        if (networkCallback != null) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    connectivityManager.bindProcessToNetwork(null);
+                } else {
+                    ConnectivityManager.setProcessDefaultNetwork(null);
+                }
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (Exception ignored) {
+            }
+            networkCallback = null;
+        }
+        updateNotification("Disconnected", "Session terminated");
+        notifyStateChange(false, "Disconnected manually");
+    }
+
     private String extractGatewayIp(Network network) {
         LinkProperties linkProperties = connectivityManager.getLinkProperties(network);
         if (linkProperties != null) {
@@ -324,13 +390,6 @@ public class PigeonService extends Service {
             }
         }
         return "192.168.4.1";
-    }
-
-    public class PigeonBinder extends LocalBinder {
-        @Override
-        public PigeonService getService() {
-            return PigeonService.this;
-        }
     }
 
     private void attemptReconnection() {
@@ -376,24 +435,11 @@ public class PigeonService extends Service {
         return gatewayIp;
     }
 
-    public void disconnect() {
-        isManuallyClosed = true;
-        isConnecting = false;
-        isConnected = false;
-        if (webSocket != null) {
-            webSocket.close(1000, "User logout/shutdown");
-            webSocket = null;
+    public class PigeonBinder extends LocalBinder {
+        @Override
+        public PigeonService getService() {
+            return PigeonService.this;
         }
-        if (networkCallback != null) {
-            try {
-                connectivityManager.bindProcessToNetwork(null);
-                connectivityManager.unregisterNetworkCallback(networkCallback);
-            } catch (Exception ignored) {
-            }
-            networkCallback = null;
-        }
-        updateNotification("Disconnected", "Session terminated");
-        notifyStateChange(false, "Disconnected manually");
     }
 
     public void registerCallback(PigeonCallback callback) {

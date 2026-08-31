@@ -23,16 +23,19 @@ android {
         versionCode = 20
         versionName = '2.0'
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionNameSuffix 'v'
-        signingConfig signingConfigs.release
+        signingConfig = signingConfigs.release
     }
 
     buildTypes {
+        debug {
+            minifyEnabled = true
+            shrinkResources = true
+        }
         release {
             minifyEnabled = true
             shrinkResources = true
+
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.release
         }
     }
 
